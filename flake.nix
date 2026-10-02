@@ -1,8 +1,8 @@
 {
   description = "Family screen-time control daemons and desktop integration";
-  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
+  inputs.nixpkgs.url = "git+ssh://git@ssh.git.wrzalek.com/nixos/upstream-nixpkgs.git?shallow=1&ref=nixos-26.05";
   inputs.sops-nix = {
-    url = "github:Mic92/sops-nix";
+    url = "git+ssh://git@ssh.git.wrzalek.com/nixos/upstream-sops-nix.git?shallow=1";
     inputs.nixpkgs.follows = "nixpkgs";
   };
   outputs =

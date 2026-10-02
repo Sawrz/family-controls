@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "sources": {
+    "ssh://git@ssh.git.wrzalek.com/nixos/family-controls.git": {
+      "primary": "ssh://git@ssh.git.wrzalek.com/nixos/family-controls.git",
+      "recovery": "ssh://git@github.com/Sawrz/family-controls.git"
+    },
+    "ssh://git@ssh.git.wrzalek.com/nixos/upstream-nixpkgs.git": {
+      "primary": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-nixpkgs.git",
+      "recovery": "https://github.com/nixos/nixpkgs.git"
+    },
+    "ssh://git@ssh.git.wrzalek.com/nixos/upstream-sops-nix.git": {
+      "primary": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-sops-nix.git",
+      "recovery": "https://github.com/Mic92/sops-nix.git"
+    }
+  },
+  "required_repositories": {
+    "deployment": "ssh://git@ssh.git.wrzalek.com/nixos/family-controls.git"
+  },
+  "operation_inputs": {
+    "checks": [],
+    "packages": [],
+    "devShells": []
+  }
+}

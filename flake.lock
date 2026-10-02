@@ -4,16 +4,23 @@
       "locked": {
         "lastModified": 1782847225,
         "narHash": "sha256-JC9PjqKYG9ve5U8aDOLQipp3+KLANBHUvGdLZlxzdKI=",
-        "owner": "nixos",
-        "repo": "nixpkgs",
+        "ref": "nixos-26.05",
         "rev": "95ca1e203c0750115fd4a6f17d5a245dfe6b1edd",
-        "type": "github"
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-nixpkgs.git"
       },
       "original": {
-        "owner": "nixos",
         "ref": "nixos-26.05",
-        "repo": "nixpkgs",
-        "type": "github"
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-nixpkgs.git"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "sops-nix": "sops-nix"
       }
     },
     "sops-nix": {
@@ -25,21 +32,15 @@
       "locked": {
         "lastModified": 1783104586,
         "narHash": "sha256-vSLKc7m34/g5xH4dwmNZSqxc5OcHeE3qiG3EIz6bJKs=",
-        "owner": "Mic92",
-        "repo": "sops-nix",
         "rev": "1ebd41717762d837d5115f7108522c29cdb00fbb",
-        "type": "github"
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-sops-nix.git"
       },
       "original": {
-        "owner": "Mic92",
-        "repo": "sops-nix",
-        "type": "github"
-      }
-    },
-    "root": {
-      "inputs": {
-        "nixpkgs": "nixpkgs",
-        "sops-nix": "sops-nix"
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-sops-nix.git"
       }
     }
   },
