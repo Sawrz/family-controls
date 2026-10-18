@@ -23,14 +23,20 @@ let
       "/run/family-controls/missing-bot-token"
     else
       config.sops.secrets.${cfg.botTokenSecret}.path;
-  relayConfig = jsonFormat.generate "family-telegram-relay.json" {
-    inherit (cfg) parentGroupChatId;
+  relayConfig = pkgs.runCommand "validated-family-telegram-relay.json" { } ''
+    ${pkgs.family-controls-relay}/bin/family-controls-relay --config ${rawRelayConfig} --check-config
+    cp ${rawRelayConfig} "$out"
+  '';
+
+  rawRelayConfig = jsonFormat.generate "family-telegram-relay.json" {
+    inherit (cfg) parentGroupChatId stateDir;
     hostChildren = mapAttrs (_name: child: {
       inherit (child)
         host
         port
         user
         deviceId
+        caFile
         ;
       apiTokenFile =
         if child.apiTokenSecret == null then null else config.sops.secrets.${child.apiTokenSecret}.path;
@@ -40,6 +46,12 @@ in
 {
   options.custom.services.family.telegramRelay = {
     enable = mkEnableOption "family Telegram relay";
+
+    stateDir = mkOption {
+      type = types.str;
+      default = "/var/lib/family-controls-relay";
+      description = "Persistent operation inbox, conversations, and notification receipts.";
+    };
 
     botTokenSecret = mkOption {
       type = types.nullOr types.str;
@@ -74,6 +86,11 @@ in
               type = types.nullOr types.str;
               default = null;
             };
+            caFile = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              description = "Trusted CA certificate file for this child's HTTPS endpoint.";
+            };
           };
         }
       );
@@ -87,17 +104,31 @@ in
         assertion = cfg.botTokenSecret != null && cfg.parentGroupChatId != null;
         message = "family.telegramRelay requires botTokenSecret and parentGroupChatId when enabled.";
       }
+      {
+        assertion =
+          cfg.hostChildren != { }
+          && builtins.all (child: child.apiTokenSecret != null) (builtins.attrValues cfg.hostChildren);
+        message = "family.telegramRelay requires children with API credentials.";
+      }
     ];
 
     sops.secrets =
       optionalAttrs (cfg.botTokenSecret != null) {
-        ${cfg.botTokenSecret} = { };
+        ${cfg.botTokenSecret}.owner = lib.mkDefault "family-controls-relay";
       }
       // listToAttrs (
-        mapAttrsToList (_name: child: lib.nameValuePair child.apiTokenSecret { }) (
-          filterAttrs (_name: child: child.apiTokenSecret != null) cfg.hostChildren
-        )
+        mapAttrsToList (
+          _name: child:
+          lib.nameValuePair child.apiTokenSecret { owner = lib.mkDefault "family-controls-relay"; }
+        ) (filterAttrs (_name: child: child.apiTokenSecret != null) cfg.hostChildren)
       );
+
+    users.groups.family-controls-relay = { };
+    users.users.family-controls-relay = {
+      isSystemUser = true;
+      group = "family-controls-relay";
+    };
+    systemd.tmpfiles.rules = [ "d ${cfg.stateDir} 0700 family-controls-relay family-controls-relay -" ];
 
     systemd.services.family-controls-relay = {
       description = "Family controls Telegram relay";
@@ -106,6 +137,18 @@ in
       wants = [ "network-online.target" ];
       serviceConfig = {
         Type = "simple";
+        User = "family-controls-relay";
+        Group = "family-controls-relay";
+        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        ReadWritePaths = [ cfg.stateDir ];
+        RestrictAddressFamilies = [
+          "AF_UNIX"
+          "AF_INET"
+          "AF_INET6"
+        ];
         ExecStart = "${pkgs."family-controls-relay"}/bin/family-controls-relay --config ${relayConfig} --bot-token-file ${botTokenPath}";
         Restart = "on-failure";
         RestartSec = "5s";

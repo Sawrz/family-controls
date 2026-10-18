@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "family-controls"
+version = "0.2.0"
+description = "Local family screen-time policy with replaceable parent interfaces"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.11,<3"]
+
+[project.scripts]
+family-controlsd = "family_controls.bootstrap:agent_main"
+family-controls-relay = "family_controls.bootstrap:relay_main"
+family-controlsctl = "family_controls.adapters.cli:main"
+family-controls-sessiond = "family_controls.adapters.countdown:main"
+family-controls-render = "family_controls.adapters.timekpr:render_main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-cov>=6", "hypothesis>=6", "ruff>=0.11", "mypy>=1.15"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["pkgs/family-controls/src/family_controls"]
+
+[tool.pytest.ini_options]
+testpaths = ["pkgs/family-controls/tests"]
+pythonpath = ["pkgs/family-controls/src"]
+addopts = "--strict-markers --strict-config"
+filterwarnings = ["error"]
+markers = ["gui: requires an isolated X display", "integration: local protocol integration"]
+
+[tool.coverage.run]
+source = ["family_controls"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+include = ["pyproject.toml", "pkgs/family-controls/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["pkgs/family-controls/src/family_controls"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true

@@ -2,7 +2,6 @@
   lib,
   makeWrapper,
   python3,
-  sqlite,
   stdenvNoCC,
 }:
 let
@@ -10,12 +9,15 @@ let
     {
       executable,
       script,
-      pythonEnv ? python3,
+      pythonEnv ? python3.withPackages (ps: [
+        ps.pydantic
+        ps.dbus-python
+      ]),
       runtimeInputs ? [ ],
     }:
     stdenvNoCC.mkDerivation {
       pname = executable;
-      version = "0.1.0";
+      version = "0.2.0";
       src = ./src;
       nativeBuildInputs = [ makeWrapper ];
 
@@ -43,13 +45,15 @@ in
   "family-controlsd" = mkTool {
     executable = "family-controlsd";
     script = "family_controlsd.py";
-    runtimeInputs = [ sqlite ];
   };
 
   "family-controls-sessiond" = mkTool {
     executable = "family-controls-sessiond";
     script = "family_controls_sessiond.py";
-    pythonEnv = python3.withPackages (ps: [ ps.tkinter ]);
+    pythonEnv = python3.withPackages (ps: [
+      ps.tkinter
+      ps.pydantic
+    ]);
   };
 
   "family-controls-relay" = mkTool {
@@ -60,5 +64,10 @@ in
   "family-controlsctl" = mkTool {
     executable = "family-controlsctl";
     script = "family_controlsctl.py";
+  };
+
+  "family-controls-render" = mkTool {
+    executable = "family-controls-render";
+    script = "family_controls_render.py";
   };
 }
