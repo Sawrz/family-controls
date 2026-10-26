@@ -1,5 +1,42 @@
 export type Language = 'en' | 'de';
 const messages = {
+  usage: ['Weekly usage', 'Wöchentliche Nutzung'],
+  usageIntro: [
+    'Measured computer use across this child’s devices. Simultaneous device usage adds up.',
+    'Gemessene Computernutzung auf den Geräten dieses Kindes. Gleichzeitige Gerätenutzung wird addiert.',
+  ],
+  sharedScope: [
+    'One allowance shared across all assigned computers.',
+    'Ein gemeinsames Kontingent für alle zugeordneten Computer.',
+  ],
+  deviceDetails: ['Computer details', 'Details zu den Computern'],
+  availableNow: ['Not yet allocated', 'Noch nicht zugeteilt'],
+  reserved: ['Allocated to computers', 'Computern zugeteilt'],
+  onThisComputer: ['available on this computer', 'auf diesem Computer verfügbar'],
+  allocationHint: [
+    'Offline computers can use only their allocated time. Unused allocations remain reserved until returned.',
+    'Offline-Computer können nur zugeteilte Zeit nutzen. Ungenutzte Zuteilungen bleiben bis zur Rückgabe reserviert.',
+  ],
+  previousWeek: ['Previous week', 'Vorherige Woche'],
+  nextWeek: ['Next week', 'Nächste Woche'],
+  meteredUsage: ['Metered play time', 'Angerechnete Spielzeit'],
+  activeUsage: ['Active computer time', 'Aktive Computerzeit'],
+  unmeteredUsage: ['Unmetered active time', 'Nicht angerechnete aktive Zeit'],
+  missingUsage: ['No usage report', 'Keine Nutzungsmeldung'],
+  partialUsage: [
+    'Reported usage · incomplete coverage',
+    'Gemeldete Nutzung · unvollständige Erfassung',
+  ],
+  futureUsage: ['Not yet recorded', 'Noch nicht erfasst'],
+  usageExplanation: [
+    'Active time measures unlocked, non-idle graphical sessions. Play time follows the configured activities and accounting rules. Unmetered active time is part of active time; these figures must not be added together.',
+    'Aktive Zeit erfasst entsperrte grafische Sitzungen ohne Leerlauf. Spielzeit folgt den konfigurierten Aktivitäten und Abrechnungsregeln. Nicht angerechnete aktive Zeit ist Teil der aktiven Zeit; diese Werte dürfen nicht addiert werden.',
+  ],
+  usageIncomplete: [
+    'Reports cover observed intervals. Offline reports arrive after reconnection; gaps and days before recording began are not zero usage.',
+    'Berichte zeigen beobachtete Zeiträume. Offline-Meldungen kommen nach der Wiederverbindung; Lücken und Tage vor Beginn der Erfassung bedeuten nicht null Nutzung.',
+  ],
+
   today: ['Today', 'Heute'],
   requests: ['Requests', 'Anfragen'],
   schedules: ['Schedules', 'Zeitpläne'],
@@ -11,6 +48,10 @@ const messages = {
   computers: ['Computers', 'Computer'],
   allComputers: ['All computers', 'Alle Computer'],
   search: ['Find a child or computer', 'Kind oder Computer suchen'],
+  noUsageChildren: [
+    'No children are configured. Add child and computer assignments in the household’s Nix configuration to start recording usage.',
+    'Es sind keine Kinder eingerichtet. Hinterlege Kinder und Computerzuordnungen in der Nix-Konfiguration des Haushalts, um die Nutzung zu erfassen.',
+  ],
   noChildren: ['No computer accounts found.', 'Keine Computerkonten gefunden.'],
   noMatches: ['No accounts match this filter.', 'Keine Konten entsprechen diesem Filter.'],
   online: ['Online', 'Online'],

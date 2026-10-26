@@ -109,8 +109,19 @@ class Timekpr:
             allowed = raw.get("ACTUAL_TIME_LEFT_CONTINUOUS", raw.get("TIME_LEFT_DAY"))
             if play is None or allowed is None:
                 raise ValueError("Missing counters")
-            return Observation(max(0, int(play)), max(0, int(allowed)), self.clock.now())
-        except (ValueError, TypeError) as exc:
+            now = self.clock.now()
+            # Configuration readback and live remaining time are not an atomic
+            # snapshot. Only the explicit counter can establish consumed usage;
+            # unreported usage stays reserved until Timekpr saves its counter.
+            spent = int(raw["PLAYTIME_SPENT_DAY"])
+            active = int(raw.get("ACTUAL_ACTIVE_PLAYTIME_ACTIVITY_COUNT", 0))
+            return Observation(
+                max(0, int(play)),
+                max(0, int(allowed)),
+                now,
+                {"playSeconds": max(0, spent), "activeActivities": active},
+            )
+        except (KeyError, ValueError, TypeError) as exc:
             raise Unavailable("Timekpr returned invalid usage counters") from exc
 
     def validate(self, policy: Policy) -> None:
@@ -125,7 +136,7 @@ class Timekpr:
     def apply(self, user: str, policy: Policy, now: datetime) -> None:
         """Set absolute policy, preserving measured usage; verify configuration readback."""
         cfg = self.config.managedUsers[user]
-        limits = [cfg.playTime.dailyLimitMinutes * 60] * 7
+        limits = [0 if self.config.agent.backend else cfg.playTime.dailyLimitMinutes * 60] * 7
         # Explicit domain unlimited maps to the maximum possible daily usage.
         limits[now.isoweekday() - 1] = (
             86400 if policy.limit_seconds is None else policy.limit_seconds
@@ -160,7 +171,7 @@ class Timekpr:
                 Policy(
                     tuple(cfg.timeWindows.for_day(now.isoweekday())),
                     tuple(cfg.timeWindows.for_day(now.isoweekday(), homework=True)),
-                    cfg.playTime.dailyLimitMinutes * 60,
+                    0 if self.config.agent.backend else cfg.playTime.dailyLimitMinutes * 60,
                     False,
                 ),
                 now,
@@ -221,6 +232,9 @@ def render_main() -> None:
     directory = Path(args.directory)
     directory.mkdir(parents=True, exist_ok=True)
     for user, cfg in config.managedUsers.items():
+        if config.agent.backend:
+            cfg = cfg.model_copy(deep=True)
+            cfg.playTime.dailyLimitMinutes = 0
         with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as temporary:
             temporary.write(render_user(user, cfg))
             temporary.flush()

@@ -49,7 +49,12 @@ class FakeEnforcer:
             raise Unavailable("Test outage")
         policy = self.policies[user]
         limit = 86400 if policy.limit_seconds is None else policy.limit_seconds
-        return Observation(max(0, limit - self.used.get(user, 0)), 86400, self.clock.now())
+        return Observation(
+            max(0, limit - self.used.get(user, 0)),
+            86400,
+            self.clock.now(),
+            {"playSeconds": self.used.get(user, 0), "activeActivities": 1},
+        )
 
     def restore(self):
         self.policies.clear()

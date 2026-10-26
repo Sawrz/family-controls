@@ -30,8 +30,7 @@ def central(setup, tmp_path):
             },
             "children": {
                 name: {
-                    "device": "device",
-                    "user": name,
+                    "assignments": [{"device": "device", "user": name}],
                     "timezone": "Europe/Berlin",
                     "policy": value.model_dump(),
                 }
@@ -233,7 +232,7 @@ def test_interface_cannot_impersonate_unlinked_parent_or_another_protocol(centra
     assert c.get("/api/v1/accounts", headers=headers).status_code == 403
 
 
-def test_expired_grant_is_not_applied_after_reconnect(central):
+def test_committed_daily_grant_remains_available_after_delayed_reconnect(central):
     sync = agent(central)
     central.client.post(
         "/api/v1/children/child/commands/add-time",
@@ -243,8 +242,8 @@ def test_expired_grant_is_not_applied_after_reconnect(central):
     central.setup.clock.advance(minutes=11)
     sync.exchange()
     sync.exchange()
-    assert central.setup.service.status("child")["effectiveDailyLimitMinutes"] == 60
-    assert central.store.get("commands", "expire")["status"] == "expired"
+    assert central.setup.service.status("child")["effectiveDailyLimitMinutes"] == 65
+    assert central.store.get("commands", "expire")["status"] == "applied"
 
 
 def test_stale_usage_becomes_unknown_and_device_cannot_report_other_users(central):
@@ -338,7 +337,7 @@ def test_invalid_credentials_are_never_echoed_in_validation_errors(central):
     assert "secret" not in response.text
 
 
-def test_revocation_cancels_undelivered_commands_but_preserves_committed_receipts(central):
+def test_revocation_preserves_centrally_committed_budget_changes(central):
     sync = agent(central)
     central.client.post(
         "/api/v1/auth/register",
@@ -354,9 +353,13 @@ def test_revocation_cancels_undelivered_commands_but_preserves_committed_receipt
     central.accounts.revoke("parent", "admin")
     sync.exchange()
     sync.exchange()
-    assert central.setup.service.status("child")["effectiveDailyLimitMinutes"] == 70
+    assert central.setup.service.status("child")["effectiveDailyLimitMinutes"] == 90
     assert central.store.get("commands", "committed")["status"] == "applied"
-    assert central.store.get("commands", "queued")["status"] == "failed"
+    assert central.store.get("commands", "queued")["status"] == "applied"
+    from family_controls.backend.accounts import Forbidden
+
+    with pytest.raises(Forbidden):
+        central.accounts.account("parent")
 
 
 def test_boot_render_uses_cached_backend_policy_without_network(setup, tmp_path, monkeypatch):
@@ -398,4 +401,226 @@ def test_missing_optional_interface_secret_does_not_block_administration(central
             headers={"Authorization": "Bearer test-telegram-token"},
         ).status_code
         == 401
+    )
+
+
+@pytest.mark.parametrize("trusted", [True, False])
+def test_private_socket_uses_kernel_identity_and_public_headers_cannot_spoof_it(
+    central, tmp_path, trusted
+):
+    import os
+    import pwd
+    import socket
+    import threading
+    import time
+
+    import httpx
+    import uvicorn
+    from family_controls.adapters.local_backend import peer_protocol
+
+    user = (
+        pwd.getpwuid(os.getuid()).pw_name if trusted else ("nobody" if os.getuid() == 0 else "root")
+    )
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    path = str(tmp_path / "adapter.sock")
+    listener.bind(path)
+    listener.listen(16)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            central.app,
+            http=peer_protocol({user: "telegram"}),
+            proxy_headers=False,
+            log_level="error",
+            timeout_graceful_shutdown=1,
+        )
+    )
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]})
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.started
+        with httpx.Client(
+            transport=httpx.HTTPTransport(uds=path, trust_env=False),
+            base_url="http://localhost",
+            trust_env=False,
+        ) as client:
+            if not trusted:
+                with pytest.raises((httpx.RemoteProtocolError, httpx.ReadError)):
+                    client.get("/api/v1/children")
+                return
+            assert client.get("/api/v1/children").status_code == 200
+            assert client.get("/api/v1/accounts").status_code == 403
+            assert (
+                client.get("/api/v1/me", headers={"X-Family-Actor": "telegram:7"}).status_code
+                == 403
+            )
+            central.accounts.link("telegram", "7", "admin", "admin")
+            assert (
+                client.get("/api/v1/me", headers={"X-Family-Actor": "telegram:7"}).json()[
+                    "username"
+                ]
+                == "admin"
+            )
+            assert (
+                client.get("/api/v1/me", headers={"X-Family-Actor": "matrix:7"}).status_code == 403
+            )
+        central.client.headers.pop("Authorization")
+        assert (
+            central.client.get(
+                "/api/v1/children",
+                headers={
+                    "X-Forwarded-For": "unix-adapter:telegram",
+                    "X-Family-Actor": "telegram:7",
+                },
+            ).status_code
+            == 401
+        )
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        listener.close()
+        assert not thread.is_alive()
+
+
+def test_native_counter_reset_does_not_restore_consumed_shared_credit(central):
+    sync = agent(central)
+    sync.exchange()
+    sync.exchange()
+    central.setup.enforcer.used["child"] = 40
+    sync.exchange()
+    before = central.setup.service.usage.read("child")
+    central.setup.enforcer.used["child"] = 0
+    sync.exchange()
+    after = central.setup.service.usage.read("child")
+    assert after.playSeconds == before.playSeconds == 40
+    assert (
+        central.setup.enforcer.policies["child"].limit_seconds
+        == after.issuedSeconds - after.returnedSeconds - 40
+    )
+    central.setup.enforcer.used["child"] = 10
+    sync.exchange()
+    assert central.backend.status("child")["reportedUsedSeconds"] == 50
+
+
+def test_lost_accounting_state_is_rejected_without_reissuing_credit(central):
+    sync = agent(central)
+    sync.exchange()
+    sync.exchange()
+    value = central.setup.service.usage.read("child")
+    key = central.backend.usage.key("child", "device", "child", value.day)
+    before = central.store.get("allocations", key)
+    central.setup.repository.relay_set(f"usage/child/{value.day}", None)
+    central.setup.service.reconcile("child")
+    report = central.setup.service.usage.read("child")
+    response = central.client.post(
+        "/api/v1/devices/device/sync",
+        json={
+            "policyRevision": 1,
+            "usage": [report.model_dump(mode="json")],
+        },
+        headers={"Authorization": "Bearer " + "device-secret" * 4},
+    )
+    assert response.status_code == 409
+    assert central.store.get("allocations", key) == before
+
+
+def test_usage_sampling_preserves_subsecond_intervals_and_marks_restart_gap(central):
+    sync = agent(central)
+    sync.exchange()
+    usage = central.setup.service.usage
+    central.setup.service.sessions = SimpleNamespace(active=lambda user: True)
+    for _ in range(11):
+        central.setup.clock.advance(milliseconds=200)
+        central.setup.service.reconcile("child")
+    measured = usage.read("child")
+    assert measured.activeSeconds == 2
+    assert measured.observedSeconds == 2
+    usage.samples.clear()
+    central.setup.clock.advance(seconds=20)
+    central.setup.service.reconcile("child")
+    assert usage.read("child").unknownSeconds == 20
+
+
+def test_surrender_keeps_unreported_consumed_time_reserved(central, monkeypatch):
+    from family_controls.domain import Observation
+
+    sync = agent(central)
+    sync.exchange()
+    sync.exchange()
+    usage = central.setup.service.usage
+    assert usage.read("child").issuedSeconds == 300
+    original = central.setup.enforcer.observe
+
+    def delayed_counter(user):
+        if user != "child":
+            return original(user)
+        return Observation(
+            250, 86400, central.setup.clock.now(), {"playSeconds": 0, "activeActivities": 0}
+        )
+
+    monkeypatch.setattr(central.setup.enforcer, "observe", delayed_counter)
+    sync.exchange()
+    value = usage.read("child")
+    assert value.returnedSeconds == 220
+    assert value.issuedSeconds - value.returnedSeconds == 80  # 50 unreported + 30 spendable
+
+
+def test_delivery_acknowledges_commands_older_than_history_page(central):
+    sync = agent(central)
+    for index in range(105):
+        central.backend.command("child", "set-limit", {"minutes": 60}, f"many-{index}", "admin")
+    for _ in range(3):
+        sync.exchange()
+    assert len(central.backend.history("child")) == 100
+    assert central.store.get("commands", "many-0")["status"] == "applied"
+    assert central.store.pending_commands("child") == []
+
+
+def test_assignment_changes_preserve_edited_policy_and_offline_reservations(central):
+    from family_controls.backend.models import Assignment
+
+    sync = agent(central)
+    sync.exchange()
+    sync.exchange()
+    before = central.backend.status("child")["reservedSeconds"]
+    central.backend.command("child", "set-limit", {"minutes": 80}, "shared-limit", "admin")
+    central.config.children["child"].assignments = [Assignment(device="replacement", user="alex")]
+    restarted = Backend(central.config, central.store, central.setup.clock, validate_user)
+    status = restarted.status("child")
+    assert status["effectiveDailyLimitMinutes"] == 80
+    assert status["reservedSeconds"] == before
+    assert status["devices"][0]["device"] == "replacement"
+
+
+@pytest.mark.parametrize("action", ["request-time", "cancel-request"])
+def test_child_request_changes_during_sync_are_not_overwritten(central, monkeypatch, action):
+    sync = agent(central)
+    sync.exchange()
+    service = central.setup.service
+    if action == "cancel-request":
+        service.execute("child", "request-time", {"minutes": 15}, "first-request", "unix:123")
+        sync.exchange()
+    original = sync.client.request
+
+    def in_flight(*args, **kwargs):
+        result = original(*args, **kwargs)
+        service.execute(
+            "child",
+            action,
+            {"minutes": 15}
+            if action == "request-time"
+            else {"requestId": service.status("child")["request"]["id"]},
+            "during-sync",
+            "unix:123",
+        )
+        return result
+
+    monkeypatch.setattr(sync.client, "request", in_flight)
+    sync.exchange()
+    monkeypatch.setattr(sync.client, "request", original)
+    sync.exchange()
+    assert central.backend.status("child")["request"]["status"] == (
+        "pending" if action == "request-time" else "cancelled"
     )

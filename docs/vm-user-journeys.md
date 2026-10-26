@@ -1,10 +1,11 @@
 # Browser-to-device VM journeys
 
-`checks.web-journeys` deploys two fresh NixOS guests on an uncached build:
+`checks.web-journeys` deploys three fresh NixOS guests on an uncached build:
 
 - **Backend:** the packaged FastAPI service, HTTPS Nginx web module and Chromium.
 - **Child computer:** the agent, real Timekpr/logind, two separate child accounts,
   the packaged request window, Dunst and an isolated Xvfb/Openbox desktop.
+- **Laptop:** a second real agent/Timekpr/logind host assigned to the same child.
 
 Pytest controls the browser through the Nix test driver. Parent changes use the
 web interface; device assertions inspect local status, Timekpr configuration and
@@ -23,6 +24,10 @@ The journeys cover:
    restart, and a single application after reconnection.
 6. A saved routine reaching the device and surviving an agent restart, with a
    narrow German browser layout captured afterward.
+7. Simultaneous activity on both computers, additive usage and weekly device
+   breakdowns in English desktop and German mobile layouts.
+8. Both computers disconnected during metered use, exhausting their reserved
+   credit locally and reconciling usage after reconnection.
 
 These are ordered stages in one disposable household. Run the whole check;
 later stages deliberately retain enrollment, session and command-history state.
@@ -34,7 +39,7 @@ nix build .#checks.x86_64-linux.web-journeys --no-link --print-out-paths -L
 ```
 
 The output contains `web-journeys.xml`, browser and child-window screenshots, and
-both VM journals. Normal Nix caching applies. Changes to the packaged software,
+all three VM journals. Normal Nix caching applies. Changes to the packaged software,
 VM configuration or journey tests invalidate the check.
 
 For a fresh boot even when the check is cached, run the driver directly:
@@ -51,7 +56,7 @@ silently converted into skips. Credentials and certificates are disposable test
 fixtures. The browser accepts the fixture's self-signed certificate; agent and
 Nginx upstream certificate verification remain enabled.
 
-The verified run on 2026-10-26 passed all six journeys in 231.73 seconds. Pytest
+The verified run on 2026-10-26 passed all eight journeys in 299.09 seconds. Pytest
 treats warnings as errors. After pytest completes, the pinned Nix test driver can
 emit resource-cleanup warnings during its own teardown; the successful run exited
 with status zero. No dependency code was modified or warnings suppressed.
@@ -66,3 +71,9 @@ interoperability with live Telegram, Matrix or OIDC providers. The existing
 
 Sources: [VM deployment](../tests/web-vm.nix) and
 [pytest journeys](../tests/web_vm/test_journeys.py).
+
+The final run’s artifacts are in
+`/nix/store/7sd714psrvs15lz9gdvmmwmv4l2cxrxm-vm-test-run-family-controls-web-journeys`.
+`request-approved.png` captures the child’s usage and shared balance; the final
+child capture is blank after the later session-termination journey. Browser
+reports, JUnit results and three journals remain available in that output.

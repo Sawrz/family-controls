@@ -17,19 +17,23 @@ The reusable Python code lives in `pkgs/family-controls/src/family_controls`.
 - Agents open outbound HTTPS connections to the backend. There is no device
   management TCP listener. A UID-authenticated Unix socket handles child requests.
 
-The backend owns desired recurring policy, accounts, device approval, parent
-commands and their delivery history. Each device owns observed usage and applied
-policy. A queued backend change is not reported as applied until the device
-acknowledges it. Offline devices keep enforcing their cached policy; stale usage
-is displayed as unknown. The cache also supplies boot-time Timekpr configuration.
+The backend owns child identities, recurring policy, shared daily allowances,
+allocation and usage ledgers, accounts and device approval. A child can have
+multiple device/account assignments. Simultaneous metered use adds up: ten minutes
+on two computers consumes twenty minutes. Devices measure usage and enforce
+reserved portions of the allowance locally. Parent changes commit once centrally;
+delivery stays pending until every assigned device acknowledges the revision.
 
-REST/JSON carries commands and reports. Persisted SSE events wake consumers;
-each interface and device stores its own cursor. Reconnects replay unacknowledged
-events. Command IDs and local transactional receipts prevent duplicate grants,
-including a crash after local commit but before acknowledgement. External chat
-notifications have at-least-once delivery: Telegram can repeat a notification if
-its send succeeds but the acknowledgement is lost. Matrix uses stable transaction
-IDs. Streams reconnect periodically so backend shutdown remains bounded.
+Active devices normally hold at most five minutes of spendable credit; idle devices
+hold a 30-second starting reserve. Offline devices can spend only their existing
+allocation. The backend never reuses unreachable devices' reserved credit. Boot
+and stop hooks cannot restore a full allowance. See [accounting details](docs/shared-usage-design.md).
+
+REST/JSON carries commands and cumulative usage reports. Persisted SSE events wake
+consumers; cursors support reconnects. Idempotency keys prevent duplicate parent
+grants and cumulative allocations survive lost responses. External chat
+notifications have at-least-once delivery; Telegram can repeat a notification after
+a lost acknowledgement, while Matrix uses stable transaction IDs.
 
 The flake uses dendritic flake-parts modules in `nix/`. Core, backend, agent,
 Telegram, Matrix, web, CLI, desktop and renderer are separate package outputs.
@@ -39,7 +43,8 @@ Vodozemac encryption backend; insecure Olm is not enabled.
 ## Parent and child workflows
 
 The [parent web interface](docs/web-interface.md) supports phone and desktop use,
-custom time changes, request decisions, schedules, history and administration.
+custom time changes, request decisions, schedules, weekly usage with device
+breakdowns, history and administration.
 Enable it with `services.family-controls.interfaces.web.enable`; its static
 SvelteKit package shares an HTTPS origin with the API through Nginx.
 
@@ -61,14 +66,15 @@ and `1h 10m`.
 | Mute requests | `/mute child`, `/unmute child` | Changes request permission separately from access |
 | History | `/history child` | Shows recent command outcomes |
 
-Today-only changes expire at local midnight. Undelivered commands expire after
-ten minutes or midnight, whichever comes first. A disconnected device's command
-remains delivery-pending until that device confirms whether it had already
-committed it or whether it expired. Restoring defaults does not erase usage.
+Today-only changes expire at local midnight. Changes commit centrally even when a
+device is offline and remain delivery-pending until it reconnects. Restoring
+defaults preserves usage. Revoking a parent blocks future commands; it does not
+undo already committed policy changes.
 
 Children can open **Family Controls** from the application launcher at any time,
 request a custom duration with a reason, cancel a pending request and see its
-outcome. Native desktop notifications at five minutes and one minute include a
+outcome, today’s usage and the last reported shared balance. The local allocation
+is shown separately because it limits offline use. Native desktop notifications at five minutes and one minute include a
 **Request more time** action; the local window also provides a fallback. An
 extension rearms warnings. The UI performs socket work outside Tk's event loop.
 
@@ -80,8 +86,9 @@ Only one parent decision can resolve a request.
 ## API and CLI
 
 The API is rooted at `/api/v1`; its schema is `/openapi.json`. Parent clients use
-`Authorization: Bearer …`. Messaging adapters have separate service credentials
-and must supply `X-Family-Actor: telegram:USER_ID` or `matrix:@user:server` for
+`Authorization: Bearer …`. Local messaging adapters authenticate through a protected Unix socket using their
+service UID. Remote adapters require an explicit backend credential and HTTPS.
+Both must supply `X-Family-Actor: telegram:USER_ID` or `matrix:@user:server` for
 interactive actions. An administrator links each sender to an approved household
 account. Interface credentials cannot approve accounts or devices.
 
@@ -91,6 +98,7 @@ account. Interface credentials cannot approve accounts or devices.
 | `GET /auth/oidc/{provider}/start` | Start browser-bound OIDC authorization with PKCE |
 | `GET /me`, `/children`, `/children/{child}/status` | Identity and device-reported status |
 | `POST /children/{child}/commands/{action}` | Queue a parent command with `Idempotency-Key` |
+| `GET /children/{child}/usage?start=YYYY-MM-DD` | Seven-day usage totals and device breakdowns |
 | `GET /children/{child}/history` | Latest 100 commands and outcomes |
 | `GET /children/{child}/policy`, `PUT …?revision=N` | Read/update desired recurring policy with revision checking |
 | `GET /events?after=N` | Resumable parent SSE stream; also accepts `Last-Event-ID` |
@@ -140,8 +148,8 @@ including on a 25-hour daylight-saving day.
 
 `countLockedTime` charges observed locked intervals within metered access,
 subtracting native usage. Unknown restart/suspend gaps are not guessed.
-It cannot be combined with `trackInactive`. The stop hook restores the cached
-recurring policy; restart reapplies valid local intent. DNS profile names describe
+It cannot be combined with `trackInactive`. The managed-device stop hook closes
+metered access; restart restores only durable allocated credit. DNS profile names describe
 externally unverified desired state; no DNS provider adapter is included.
 
 ## Development and validation

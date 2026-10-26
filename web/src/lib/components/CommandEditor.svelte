@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { assignmentLabel } from '#lib/contracts.ts';
   import { untrack } from 'svelte';
   import { actions, type Child, type Action, type Command } from '../contracts';
   import { translate, type Language, type Message } from '../i18n';
@@ -141,7 +142,7 @@
     <h2 id="change-heading" tabindex="-1">{t(heading)}</h2>
     <button class="text-button" onclick={onclose}>{t('close')}</button>
   </div>
-  <p class="help">{child.id} · {child.policy.device} · {child.policy.user}</p>
+  <p class="help">{child.id} · {assignmentLabel(child)}</p>
   {#if request && !child.status.pendingRequest}<p role="status">{t('requestExpired')}</p>
   {:else}
     {#if request && child.status.pendingRequest}<blockquote>

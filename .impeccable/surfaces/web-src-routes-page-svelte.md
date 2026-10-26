@@ -11,8 +11,8 @@ Mode: Operate. Parents and household administrators use phones and desktops equa
 Scope: daily controls, requests, recurring policies, command history, sign-in/registration,
 account/device approval, invitations and identity links. English and German throughout.
 SvelteKit/TypeScript static files; same-origin FastAPI cookie sessions and SSE; separate Nix package.
-Shared machines have separate computer accounts; budgets remain per computer/account.
-No child-facing web login, pooled cross-device budgets, invented analytics or DNS enforcement.
+Shared machines have separate computer accounts; each child shares one allowance across assigned devices. Simultaneous metered usage is summed.
+Weekly usage reports show observed daily totals and device breakdowns, with missing and partial coverage explicit. No child-facing web login, invented analytics or DNS enforcement.
 Prototype fixtures cover three children, larger households, shared devices, offline/unknown state,
 concurrent decisions, stale policy revisions, failed/expired commands and disabled auth methods.
 

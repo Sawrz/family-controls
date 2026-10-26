@@ -3,16 +3,29 @@
 import json
 import secrets
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from dataclasses import asdict
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from ..application import validate_command
+from ..application import transition, validate_command
 from ..config import User
-from ..domain import Conflict, InvalidCommand, midnight_after
+from ..domain import (
+    Conflict,
+    InvalidCommand,
+    Observation,
+    Request,
+    State,
+    Unavailable,
+    duration,
+    midnight_after,
+    state_from_dict,
+)
 from ..ports import Clock
+from ..usage import Usage
 from .accounts import Forbidden, Unauthorized, digest
 from .models import BackendConfig, ChildPolicy, DeviceReport, Enrollment
 from .ports import Store
+from .usage import UsageLedger
 
 
 class Backend:
@@ -25,6 +38,7 @@ class Backend:
     ) -> None:
         self.config, self.store, self.clock = config, store, clock
         self.validate_policy = validate_policy
+        self.usage = UsageLedger(store, config.allocationSeconds)
         # Nix provides the initial desired policies. Later changes are centrally persisted.
         with store.transaction():
             for child, policy in config.children.items():
@@ -32,10 +46,20 @@ class Backend:
                 existing = store.get("policies", child)
                 if existing is None:
                     store.put("policies", child, {"revision": 1, **policy.model_dump()})
-                elif (existing["device"], existing["user"]) != (policy.device, policy.user):
+                elif "assignments" not in existing:
                     raise InvalidCommand(
-                        "Device/user assignments cannot change under an existing child"
+                        "Legacy device-bound policies require an explicit shared-budget migration"
                     )
+                elif existing["timezone"] != policy.timezone:
+                    raise InvalidCommand(
+                        "Changing a policy timezone requires explicit day reconciliation"
+                    )
+                elif existing["assignments"] != [a.model_dump() for a in policy.assignments]:
+                    existing.update(
+                        assignments=[a.model_dump() for a in policy.assignments],
+                        revision=existing["revision"] + 1,
+                    )
+                    store.put("policies", child, existing)
 
     def emit(self, kind: str, data: dict, device: str | None = None) -> None:
         at = self.clock.now().isoformat()
@@ -57,23 +81,21 @@ class Backend:
             old = self.policy(child)
             if old["revision"] != revision:
                 raise Conflict("Policy changed; refresh before editing")
-            if (old["device"], old["user"], old["timezone"]) != (
-                policy.device,
-                policy.user,
+            if (old["assignments"], old["timezone"]) != (
+                [a.model_dump() for a in policy.assignments],
                 policy.timezone,
             ):
-                raise InvalidCommand("Device assignment and timezone are deployment settings")
+                raise InvalidCommand("Assignments and timezone are deployment settings")
             result = {"revision": revision + 1, **policy.model_dump()}
             self.store.put("policies", child, result)
             self.emit(
                 "policy.changed",
                 {"child": child, "actor": actor, "revision": revision + 1},
-                old["device"],
             )
         return result
 
     def enrollment_token(self, device: str, actor: str) -> str:
-        if device not in {c.device for c in self.config.children.values()}:
+        if device not in {a.device for c in self.config.children.values() for a in c.assignments}:
             raise InvalidCommand("Configure a child assigned to this device first")
         token = secrets.token_urlsafe(32)
         with self.store.transaction():
@@ -146,8 +168,27 @@ class Backend:
             self.emit("device." + record["status"], {"device": device, "actor": actor}, device)
         return {"device": device, "status": record["status"]}
 
+    def local_now(self, child: str) -> datetime:
+        return self.clock.now().astimezone(ZoneInfo(self.policy(child)["timezone"]))
+
+    def state(self, child: str) -> State:
+        data = self.store.get("child-state", child)
+        return (state_from_dict(data) if data else State()).today(self.local_now(child))
+
+    def limit(self, child: str, state: State | None = None) -> int | None:
+        state = state or self.state(child)
+        return (
+            None
+            if state.unlimited
+            else max(
+                0,
+                self.policy(child)["policy"]["playTime"]["dailyLimitMinutes"] * 60
+                + state.delta_seconds,
+            )
+        )
+
     def command(self, child: str, action: str, payload: dict, operation: str, actor: str) -> dict:
-        validate_command(action, payload)
+        command = validate_command(action, payload)
         if action in {"request-time", "cancel-request"}:
             raise Forbidden("Child requests originate on the authenticated device")
         if not operation or len(operation) > 128:
@@ -160,88 +201,129 @@ class Backend:
                 if previous["fingerprint"] != fingerprint:
                     raise Conflict("Operation identity belongs to another command")
                 return {**self.status(child), "operation": previous, "duplicate": True}
-            queued = self.store.pending_commands(policy["device"])
-            if len(queued) >= 100:
-                raise InvalidCommand("Device command queue is full; wait for delivery")
-            request_id = payload.get("requestId") if action == "decide-request" else None
-            if request_id:
-                claim = self.store.get("decisions", child + ":" + request_id)
-                if claim:
-                    raise Conflict("This request already has a submitted decision")
-                request = self.status(child).get("pendingRequest")
-                if not request or request["id"] != request_id:
-                    raise Conflict("Request is no longer pending")
-                self.store.put("decisions", child + ":" + request_id, {"operationId": operation})
-            now = self.clock.now()
-            expires = min(
-                now + timedelta(seconds=self.config.commandLifetimeSeconds),
-                midnight_after(now.astimezone(ZoneInfo(policy["timezone"]))),
+            status = self.status(child)
+            if action in {"set-remaining", "deduct-time"} and status["connectivity"] != "online":
+                raise Unavailable("All assigned devices must report fresh usage")
+            now = self.local_now(child)
+            state = self.state(child)
+            if (
+                command.expectedRevision is not None
+                and command.expectedRevision != policy["revision"]
+            ):
+                raise Conflict("Policy changed; refresh and try again")
+            remaining = status["remainingPlayTimeSeconds"] or 0
+            state = transition(
+                User.model_validate(policy["policy"]),
+                state,
+                action,
+                command,
+                actor,
+                now,
+                Observation(remaining, 86400, now),
             )
-            command = {
+            policy["revision"] += 1
+            state.revision = policy["revision"]
+            self.store.put("child-state", child, asdict(state))
+            self.store.put("policies", child, policy)
+            record = {
                 "operationId": operation,
                 "child": child,
-                "device": policy["device"],
-                "user": policy["user"],
                 "action": action,
                 "payload": payload,
                 "actor": actor,
                 "fingerprint": fingerprint,
                 "createdAt": now.isoformat(),
-                "expiresAt": expires.isoformat(),
+                "expiresAt": midnight_after(now).isoformat(),
+                "revision": policy["revision"],
                 "status": "queued",
             }
-            self.store.put("commands", operation, command)
-            self.emit(
-                "command.queued", {"child": child, "operationId": operation}, policy["device"]
-            )
-        return {**self.status(child), "operation": command, "duplicate": False}
+            self.store.put("commands", operation, record)
+            for assignment in policy["assignments"]:
+                self.emit(
+                    "command.queued",
+                    {"child": child, "operationId": operation},
+                    assignment["device"],
+                )
+        return {**self.status(child), "operation": record, "duplicate": False}
 
     def status(self, child: str) -> dict:
-        policy = self.policy(child)
-        report = self.store.get("reports", child)
-        status = (
-            dict(report["status"])
-            if report
-            else {
-                "user": policy["user"],
-                "phase": "unknown",
-                "application": {"status": "unknown"},
-                "effectiveDailyLimitMinutes": policy["policy"]["playTime"]["dailyLimitMinutes"],
-                "summary": {"playTimeLeft": "Unknown", "allowedLeft": "Unknown"},
-            }
-        )
-        online = bool(
-            report
-            and (self.clock.now() - datetime.fromisoformat(report["at"])).total_seconds()
-            <= self.config.staleSeconds
-        )
-        status["connectivity"] = "online" if online else "offline"
-        status["lastSeen"] = report["at"] if report else None
-        if not online:
-            status.update(
-                phase="unknown",
-                remainingPlayTimeSeconds=None,
-                remainingCountdownSeconds=None,
-                remainingAllowedSeconds=None,
+        policy, now, state = self.policy(child), self.local_now(child), self.state(child)
+        devices = []
+        for assignment in policy["assignments"]:
+            report = self.store.get("reports", child + "/" + assignment["device"]) or {}
+            fresh = (
+                bool(report)
+                and (self.clock.now() - datetime.fromisoformat(report["at"])).total_seconds()
+                <= self.config.staleSeconds
             )
-            status["summary"] = {"playTimeLeft": "Unknown", "allowedLeft": "Unknown"}
-        queued = [c for c in self.store.pending_commands(policy["device"]) if c["child"] == child]
-        status["delivery"] = {"pending": len(queued), "status": "pending" if queued else "idle"}
-        if queued:
-            status["application"] = {**status["application"], "status": "pending"}
-        device = self.store.get("devices", policy["device"]) or {}
-        expected = sum(
-            self.policy(name)["revision"]
-            for name, item in self.config.children.items()
-            if item.device == policy["device"]
+            device = self.store.get("devices", assignment["device"]) or {}
+            fresh = fresh and device.get("status") == "approved"
+            fresh = fresh and report.get("status", {}).get("connectivity") == "online"
+            devices.append(
+                {
+                    **assignment,
+                    "connectivity": "online" if fresh else "offline",
+                    "lastSeen": report.get("at"),
+                    "status": report.get("status", {}),
+                    "policyRevision": report.get("revision", 0),
+                }
+            )
+        online = all(d["connectivity"] == "online" for d in devices)
+        limit = self.limit(child, state)
+        balance = self.usage.balance(child, now.date(), limit)
+        pending = [
+            d
+            for d in devices
+            if d["policyRevision"] != policy["revision"]
+            or d["status"].get("application", {}).get("status") != "applied"
+        ]
+        remaining = (
+            None if not online or limit is None else max(0, limit - balance["reportedUsedSeconds"])
         )
-        status["policyDelivery"] = (
-            "applied" if device.get("policyRevision") == expected else "pending"
-        )
-        if status["policyDelivery"] == "pending":
-            status["application"] = {**status["application"], "status": "pending"}
-        status["desiredPolicyRevision"] = policy["revision"]
-        return status
+        request = state.request if state.request and state.request.active(now) else None
+        last_seen = min((d["lastSeen"] for d in devices if d["lastSeen"]), default=None)
+        return {
+            "user": child,
+            "revision": policy["revision"],
+            "devices": devices,
+            "phase": "blocked"
+            if state.blocked_until
+            else "unknown"
+            if not online
+            else "expired"
+            if remaining == 0
+            else "idle",
+            "connectivity": "online" if online else "offline",
+            "lastSeen": last_seen,
+            "application": {"status": "pending" if pending else "applied", "error": None},
+            "delivery": {"pending": len(pending), "status": "pending" if pending else "idle"},
+            "policyDelivery": "pending" if pending else "applied",
+            "blocked": bool(state.blocked_until),
+            "muted": state.muted,
+            "unlimitedToday": state.unlimited,
+            "effectiveDailyLimitMinutes": limit / 60 if limit is not None else None,
+            "remainingPlayTimeSeconds": remaining,
+            "remainingCountdownSeconds": remaining,
+            "reportedUsedSeconds": balance["reportedUsedSeconds"],
+            "countedLockedSeconds": sum(
+                d["status"].get("countedLockedSeconds", 0) for d in devices
+            ),
+            "availableSeconds": balance["availableSeconds"],
+            "reservedSeconds": balance["reservedSeconds"],
+            "pendingRequest": {**asdict(request), "requestedAt": request.created_at}
+            if request
+            else None,
+            "request": asdict(state.request) if state.request else None,
+            "overrideExpiresAt": midnight_after(now).isoformat(),
+            "summary": {
+                "playTimeLeft": "Unlimited"
+                if limit is None
+                else duration(remaining)
+                if remaining is not None
+                else "Unknown",
+                "allowedLeft": "See device status",
+            },
+        }
 
     def history(self, child: str) -> list[dict]:
         self.policy(child)
@@ -256,55 +338,113 @@ class Backend:
             for c in self.store.command_history(child)
         ]
 
+    def week(self, child: str, start: date | None = None) -> dict:
+        today = self.local_now(child).date()
+        start = start or today - timedelta(days=today.weekday())
+        return self.usage.week(child, start, today, self.policy(child)["assignments"])
+
     def sync(self, device: str, report: DeviceReport) -> dict:
-        policies = {
-            name: self.policy(name)
+        assignments = {
+            a.user: name
             for name, c in self.config.children.items()
-            if c.device == device
+            for a in c.assignments
+            if a.device == device
         }
-        users = {p["user"]: name for name, p in policies.items()}
-        if set(report.statuses) - users.keys():
+        if set(report.statuses) - assignments.keys() or any(
+            r.user not in assignments for r in report.usage
+        ):
             raise Forbidden("Device cannot report another device's users")
+        now = self.clock.now()
         with self.store.transaction():
-            now = self.clock.now()
-            for user, status in report.statuses.items():
-                child = users[user]
-                previous = self.store.get("reports", child)
-                self.store.put("reports", child, {"status": status, "at": now.isoformat()})
-                # Publish meaningful request transitions, not a new event for every clock tick.
-                if (previous or {}).get("status", {}).get("request") != status.get("request"):
-                    self.emit("request.changed", {"child": child, "request": status.get("request")})
-            for outcome in report.outcomes:
-                command = self.store.get("commands", outcome.operationId)
-                if not command or command["device"] != device:
-                    raise Forbidden("Device cannot acknowledge another device's command")
-                if command["status"] in {"applied", "superseded", "failed", "expired"}:
-                    continue
-                if command["status"] != outcome.status:
-                    command.update(status=outcome.status, error=outcome.error)
-                    self.store.put("commands", outcome.operationId, command)
-                    if outcome.status in {"failed", "expired"}:
-                        self.release_decision(command)
-                    self.emit(
-                        "command." + outcome.status,
-                        {"child": command["child"], "operationId": outcome.operationId},
+            for usage in report.usage:
+                child = assignments[usage.user]
+                self.usage.accept(child, device, usage, self.local_now(child).date())
+            policies = {}
+            for user, child in assignments.items():
+                policy, state = self.policy(child), self.state(child)
+                status = report.statuses.get(user, {})
+                incoming = status.get("request")
+                if incoming and incoming.get("status") == "pending":
+                    request = Request(**incoming)
+                    seen = self.store.get("requests", child + "/" + request.id)
+                    if not seen and request.active(self.local_now(child)):
+                        self.store.put("requests", child + "/" + request.id, {"device": device})
+                        if (
+                            not state.muted
+                            and not state.blocked_until
+                            and not (state.request and state.request.active(self.local_now(child)))
+                        ):
+                            state.request = request
+                            policy["revision"] += 1
+                            self.store.put("child-state", child, asdict(state))
+                            self.store.put("policies", child, policy)
+                            self.emit("request.changed", {"child": child})
+                elif (
+                    incoming
+                    and incoming.get("status") == "cancelled"
+                    and state.request
+                    and state.request.id == incoming.get("id")
+                    and state.request.status == "pending"
+                ):
+                    state.request = Request(**incoming)
+                    policy["revision"] += 1
+                    self.store.put("child-state", child, asdict(state))
+                    self.store.put("policies", child, policy)
+                    self.emit("request.changed", {"child": child})
+                today = self.local_now(child).date()
+                key = self.usage.key(child, device, user, today)
+                stored = self.store.get("usage", key)
+                usage = (
+                    Usage.model_validate(
+                        {k: v for k, v in stored.items() if k not in {"child", "device"}}
                     )
-            commands = []
-            for command in self.store.pending_commands(device):
-                # Only the device can distinguish an expired undelivered command from
-                # an already committed command whose acknowledgement was lost.
-                account = self.store.get("accounts", command["actor"])
-                commands.append(
-                    {**command, "cancelled": not account or account["status"] != "approved"}
+                    if stored
+                    else Usage(user=user, day=today)
                 )
+                allocation = self.usage.allocate(
+                    child,
+                    device,
+                    usage,
+                    today,
+                    self.limit(child, state),
+                    policy["revision"],
+                    blocked=bool(state.blocked_until),
+                )
+                self.store.put(
+                    "reports",
+                    child + "/" + device,
+                    {
+                        "status": status,
+                        "at": now.isoformat(),
+                        "revision": usage.policyRevision,
+                    },
+                )
+                policies[child] = {
+                    **policy,
+                    "user": user,
+                    "device": device,
+                    "state": asdict(state),
+                    "allocation": allocation.model_dump(mode="json"),
+                }
+                for command in self.store.pending_commands(child):
+                    deliveries = [
+                        self.store.get("reports", child + "/" + a["device"]) or {}
+                        for a in policy["assignments"]
+                    ]
+                    if all(
+                        d.get("revision", 0) >= command["revision"]
+                        and d.get("status", {}).get("application", {}).get("status") == "applied"
+                        for d in deliveries
+                    ):
+                        command["status"] = "applied"
+                        self.store.put("commands", command["operationId"], command)
+                        self.emit(
+                            "command.applied",
+                            {"child": child, "operationId": command["operationId"]},
+                        )
             record = self.store.get("devices", device)
             if record is None:
                 raise Unauthorized("Unknown device")
             record.update(lastSeen=now.isoformat(), policyRevision=report.policyRevision)
             self.store.put("devices", device, record)
-        return {"policies": policies, "commands": commands[:100], "serverTime": now.isoformat()}
-
-    def release_decision(self, command: dict) -> None:
-        if command["action"] == "decide-request":
-            key = command["child"] + ":" + command["payload"]["requestId"]
-            self.store.delete("decisions", key)
+        return {"policies": policies, "serverTime": now.isoformat()}

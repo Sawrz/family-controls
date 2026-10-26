@@ -2,9 +2,44 @@
 
 The hard-cut central architecture replaces the implementation described by the
 [2026-10-18 baseline review](2026-10-18-review.md). Work is on
-`feature/reliable-family-controls`. No live `nix-config`, production credentials,
-runtime databases or external chat accounts were changed. The user's existing
-`AGENTS.md` modification is untouched.
+`feature/shared-child-usage`. No live `nix-config`, production credentials,
+runtime databases or external chat accounts were changed. `AGENTS.md` and external dependencies are untouched. The user explicitly authorized
+changes to this repository’s core package and summed simultaneous device usage.
+
+
+## Shared allowance implementation
+
+A child’s policy targets a validated list of device/account assignments. The
+backend reserves finite daily credit transactionally before delivery; devices
+persist cumulative consumption, allocation and surrender counters. Duplicate and
+out-of-order reports cannot restore credit. Offline or revoked devices keep their
+reservation until a confirmed return or day rollover; native polling overruns are
+charged rather than rejected. No unused-time timeout can duplicate the budget.
+
+Timekpr’s explicit consumed-time counter is authoritative for metered use. Its live
+remaining value and configured limit can be out of sync after a policy change;
+the implementation never subtracts those to infer consumption. Unreported usage
+stays reserved. Native counter resets and lost accounting-state epochs have
+regression coverage. Child requests created or cancelled during a synchronization
+round trip survive the response without overriding a parent decision.
+
+Separate daily records support indexed seven-day reports. Active graphical use and
+unmetered active use are sampled separately, with unknown coverage explicit.
+Usage is summed across devices; grants are applied only once. Parent Today shows
+shared balance and per-device delivery/allocation. Weekly usage supports numeric
+daily totals, device details, navigation, refresh, failures and empty households.
+The native child window shows local usage, local spendable time and the last known
+shared balance.
+
+Local chat adapters use an OS-protected Unix socket and kernel peer UIDs; public
+HTTP headers cannot impersonate that channel. Nix creates the users/group/socket
+wiring automatically. Remote adapters still require explicit HTTPS credentials.
+The central VM executes Telegram as its configured local service user and Matrix
+through its remote credential, with external provider transport simulated.
+
+Deployment is a hard cut: legacy singular device/user policy metadata must be
+converted deliberately before activation; startup refuses it without deleting
+state. See [deployment](../deployment.md) and [accounting contract](../shared-usage-design.md).
 
 ## Delivered scope
 
@@ -19,10 +54,9 @@ REST commands and reports are paired with persisted, resumable SSE streams.
 Devices enforce cached policy offline and acknowledge applied results. Device
 registration consumes a short-lived token and remains pending until an admin
 approves it. Scoped credentials can be revoked and replaced by reenrollment.
-Command identity survives backend/device restarts and uncertain delivery. An
-expired command is resolved on the device so a lost acknowledgement cannot turn
-an already committed grant into a false failure. Revoked parents' undelivered
-commands are cancelled; committed receipts remain truthful.
+Command identity survives backend/device restarts and uncertain delivery. Parent changes commit once centrally and remain pending until assigned devices
+acknowledge the policy. Revoking a parent blocks future actions without undoing
+already committed changes, including ones awaiting delivery.
 
 Password and OIDC registration/login have four independent switches. Approval is
 the default; identity-bound invitations can preapprove. Bootstrap is explicit,
@@ -55,7 +89,7 @@ old interfaces/options are intentionally not preserved.
 | Validation | Pydantic configuration/wire models, action-specific validation, bounded inputs, secret-safe validation errors and build-time configuration checking. |
 | Enforcement | Timekpr D-Bus results and configuration readback checked. Pending/applied states stay distinct, including failed recurring-policy delivery. |
 | Accounting and time | Fresh usage required for remaining-time changes; stale/unknown usage remains unknown. Measured locked intervals, no inferred suspend gaps, local-midnight expiry and DST tests. |
-| Recurring/temporary policy | Cached backend policy survives offline boots. Reconciliation repairs drift; stop restores recurring policy; daily overrides expire. |
+| Recurring/temporary policy | Cached backend policy survives offline boots. Reconciliation repairs drift; managed stop/boot closes metered access until durable credit is restored; daily overrides expire. |
 | Desktop | Real window class, request launcher, native threshold notifications, background I/O, visible request outcomes and UI-thread resource cleanup. |
 | Efficiency | Indexed pending/history queries, change-driven notifications, bounded queues/workers, limited concurrent Argon2 work and change-only Timekpr setters. |
 | Matrix encryption | Vodozemac SDK runtime, explicit trusted-device fingerprints, encryption mismatch refusal, durable inbox/crypto state and resource cleanup. No insecure Olm override. |
@@ -68,25 +102,27 @@ Verified on 2026-10-26:
 
 | Check | Result |
 | --- | --- |
-| Packaged pytest suite | 182 passed; one Matrix SDK test runs separately |
-| Branch-aware coverage | 79.14%, above the 70% gate |
+| Packaged pytest suite | 209 passed; one Matrix SDK test runs separately |
+| Branch-aware coverage | 79.00%, above the 70% gate |
 | Actual encrypted Matrix SDK runtime | 1 passed on Python 3.14, including crypto-store shutdown |
-| Full x86_64 `nix flake check` | All 12 checks passed, including both VM suites, packages, interfaces and desktop wiring |
+| Full x86_64 `nix flake check` | All 10 checks passed, including both VM suites, packages, interfaces and desktop wiring |
 | x86_64/aarch64 output evaluation | Passed with `--all-systems --no-build`; ARM runtime not tested |
 | Ruff, additional S/SIM/C4 rules, mypy, Nix formatting and whitespace | Passed |
-| Hash-locked PyPI runtime advisory audit | 49 packages audited, no skips and no known vulnerabilities reported |
-| Parent web browser workflows | 31 passed locally and against the Nix-built package through HTTPS Nginx |
-| Browser-to-device VM journeys | 6 passed in 231.73 seconds in fresh NixOS guests, with real Timekpr enforcement and native child UI |
-| Frontend execution coverage | 98.53% statements, 87.64% branches from source-mapped Chromium V8 coverage |
+| Earlier locked-dependency advisory audit | 49 Python packages and npm lock audited with no known vulnerabilities reported; dependency locks are unchanged in this implementation |
+| Parent web browser workflows | 34 passed locally and against the Nix-built package through HTTPS Nginx |
+| Browser-to-device VM journeys | 8 passed in 299.09 seconds across three fresh NixOS guests, with real Timekpr enforcement and native child UI |
+| Frontend execution coverage | 98.73% statements, 88.49% branches from source-mapped Chromium V8 coverage |
 | Web static checks | Svelte/TypeScript: zero errors or warnings; formatting and production build passed |
 | Web accessibility and layout | Axe WCAG A/AA and overflow checks passed at desktop, 390px and 320px, including German |
-| Web dependency advisory audit | npm reported zero known vulnerabilities in the locked dependency set |
 
 The web interface's independent Impeccable review scored scope labeling, allowance
 previews and design provenance resolved, with a final `ship` disposition for those
-fixes. This is a design review, not a claim that automated accessibility checks
-replace manual assistive-technology testing. The web package uses the existing
-core API without changing core-package source.
+fixes. Automated accessibility checks do not replace manual assistive-technology
+testing. This extension also changes the authorized core and central accounting.
+The shared-usage review scored report refresh and empty/removed-child handling
+resolved, with a `ship` disposition for those two fixes. The documenter verified
+that the existing design system remains intact; pre-existing metadata drift was
+reported and left unchanged.
 
 The suite includes:
 
@@ -104,14 +140,16 @@ The suite includes:
   real Timekpr/logind/systemd/TLS, enrollment and approval, replay, both chat
   adapters, network outage, backend reboot, agent SIGKILL, sibling UID isolation,
   measured locked usage, observed game-process termination, midnight and stop-hook
-  restoration. Both guests shut down after the test.
+  closure. Both guests shut down after the test.
 - A separate browser-to-device run with Chromium and HTTPS Nginx on the backend
-  VM (2,048 MiB), and the native child UI on the managed-device VM (1,536 MiB).
-  Six ordered journeys cover browser enrollment/approval, a custom grant with
+  VM (2,048 MiB), the native child UI on the managed-device VM (1,536 MiB), and a
+  second managed laptop (1,536 MiB) sharing the same child allowance.
+  Eight ordered journeys cover browser enrollment/approval, a custom grant with
   lost-response retry, five/one-minute warnings and a child request, real activity
   termination at exhaustion, extensions/unlimited/blocking, queued delivery
-  through a backend restart, and routine persistence through an agent restart.
-  Screenshots, JUnit results and both journals are saved in the check output.
+  through a backend restart, routine persistence, simultaneous usage, weekly reports
+  and bounded offline credit on both computers.
+  Screenshots, JUnit results and all three journals are saved in the check output.
   See [VM user journeys](../vm-user-journeys.md) for reproduction and boundaries.
 - Hash-locked PyPI runtime advisory audit: 49 packages, no known vulnerabilities
   reported. This is a point-in-time advisory result, not an audit of the entire
@@ -144,6 +182,6 @@ across the backend, agent and Timekpr. Backend receipts/events are retained for
 replay; operators must monitor and back up state. Telegram notifications can
 repeat after an uncertain send, while repeated commands cannot repeat a grant.
 
-Named holiday schedules, weekday-specific budgets, temporary pause timers and
-usage summaries remain optional product backlog. DNS enforcement needs a provider
+Named holiday schedules, weekday-specific budgets and temporary pause timers
+remain optional product backlog. Daily/weekly usage reports are implemented. DNS enforcement needs a provider
 contract. The web interface does not add these backend capabilities.

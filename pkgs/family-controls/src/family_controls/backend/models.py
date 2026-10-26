@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, model_validator
 
 from ..config import Identifier, Model, User
+from ..usage import Usage
 
 Role = Literal["admin", "parent"]
 Key = Annotated[str, Field(min_length=1, max_length=128)]
@@ -64,9 +65,13 @@ class Authentication(Model):
         return self
 
 
-class ChildPolicy(Model):
+class Assignment(Model):
     device: Identifier
     user: Identifier
+
+
+class ChildPolicy(Model):
+    assignments: list[Assignment] = Field(min_length=1, max_length=32)
     timezone: str = "Europe/Berlin"
     policy: User
 
@@ -75,6 +80,8 @@ class ChildPolicy(Model):
         from zoneinfo import ZoneInfo
 
         ZoneInfo(self.timezone)
+        if len({a.device for a in self.assignments}) != len(self.assignments):
+            raise ValueError("A child has one OS account per assigned device")
         return self
 
 
@@ -93,8 +100,11 @@ class BackendConfig(Model):
     authentication: Authentication
     children: dict[Identifier, ChildPolicy] = Field(min_length=1)
     interfaces: dict[Identifier, InterfaceCredential] = Field(default_factory=dict)
-    commandLifetimeSeconds: Annotated[int, Field(ge=30, le=3600)] = 600
     staleSeconds: Annotated[int, Field(ge=10, le=300)] = 30
+    allocationSeconds: Annotated[int, Field(ge=60, le=3600)] = 300
+    adapterSocketPath: str | None = None
+    adapterSocketGroup: str = "family-controls-adapters"
+    localAdapters: dict[Identifier, Literal["telegram", "matrix"]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def topology(self) -> "BackendConfig":
@@ -105,11 +115,20 @@ class BackendConfig(Model):
             raise ValueError("publicUrl must be an HTTPS origin")
         if url.username or url.password or url.query or url.fragment:
             raise ValueError("publicUrl must not contain credentials, query or fragment")
-        pairs = [(child.device, child.user) for child in self.children.values()]
+        pairs = [(a.device, a.user) for child in self.children.values() for a in child.assignments]
         if len(set(pairs)) != len(pairs):
             raise ValueError("Each device/user must have exactly one child identity")
-        for device in {child.device for child in self.children.values()}:
-            if len({c.timezone for c in self.children.values() if c.device == device}) != 1:
+        for device in {a.device for c in self.children.values() for a in c.assignments}:
+            if (
+                len(
+                    {
+                        c.timezone
+                        for c in self.children.values()
+                        if any(a.device == device for a in c.assignments)
+                    }
+                )
+                != 1
+            ):
                 raise ValueError("Children on one device must share its policy timezone")
         return self
 
@@ -161,6 +180,7 @@ class DeviceReport(Model):
     policyRevision: Annotated[int, Field(ge=0)]
     statuses: dict[Identifier, dict] = Field(default_factory=dict, max_length=100)
     outcomes: list[Outcome] = Field(default_factory=list, max_length=100)
+    usage: list[Usage] = Field(default_factory=list, max_length=100)
 
 
 class Event(Model):

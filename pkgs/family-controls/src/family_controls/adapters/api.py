@@ -7,6 +7,7 @@ import logging
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import date
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Query, Request, Response
@@ -118,6 +119,10 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
         return request.cookies.get("family_session", "")
 
     def principal(request: Request) -> dict:
+        peer = request.client.host if request.client else ""
+        if peer.startswith("unix-adapter:"):
+            kind = peer.removeprefix("unix-adapter:")
+            return {"username": "interface:" + kind, "role": "interface", "kind": kind}
         credential = token(request)
         if credential:
             for name, interface in config.interfaces.items():
@@ -265,6 +270,10 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
     @app.get("/api/v1/children/{child}/history")
     def history(child: str, identity: Reader) -> dict:
         return {"events": backend.history(child)}
+
+    @app.get("/api/v1/children/{child}/usage")
+    def usage(child: str, identity: Reader, start: date | None = None) -> dict:
+        return backend.week(child, start)
 
     @app.get("/api/v1/children/{child}/policy")
     def policy(child: str, identity: Parent) -> dict:

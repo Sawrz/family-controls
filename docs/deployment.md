@@ -36,10 +36,10 @@ policy = {
 Process masks must match the actual applications on your devices. DNS names are
 metadata only. Backend policy is seeded from Nix on first use; subsequent API
 policy edits are authoritative and survive rebuilds. Nix continues to define
-child/device/user assignments, timezone and OS account settings. Keep those
-assignments stable. The device's initial policy is its fallback until its first
-successful approved synchronization; thereafter its persisted backend cache is
-used even offline and during boot rendering.
+child/device/user assignments, timezone and OS account settings. Assignment edits preserve saved policy and usage. Removed devices’ reserved credit
+remains unavailable until surrendered or the accounting day ends. Before its first
+approved allocation, a device has no metered credit. Its persisted allocation and
+policy cache support later offline operation; a new day requires a new allocation.
 
 A central host behind an existing HTTPS reverse proxy:
 
@@ -59,14 +59,12 @@ A central host behind an existing HTTPS reverse proxy:
       publicUrl = "https://family.example.net";
       authentication.bootstrapPasswordFile = "/run/secrets/family-admin-password";
       children.alex = {
-        device = "kids-pc";
-        user = "alex";
+        assignments = [
+          { device = "kids-pc"; user = "alex"; }
+          { device = "kids-laptop"; user = "alex"; }
+        ];
         timezone = "Europe/Berlin";
         inherit policy;
-      };
-      interfaces = {
-        telegram = { kind = "telegram"; tokenFile = "/run/secrets/backend-telegram"; };
-        matrix = { kind = "matrix"; tokenFile = "/run/secrets/backend-matrix"; };
       };
     };
   };
@@ -83,8 +81,8 @@ A central host behind an existing HTTPS reverse proxy:
 
 Configure the virtual host's certificate and firewall in your deployment. The
 backend binds loopback by default. Alternatively configure `bindHost`, `port`,
-`tlsCertFile` and `tlsKeyFile` for its own TLS listener. Device/interface clients
-always require verified HTTPS. For a private CA, configure `backend.caFile` or
+`tlsCertFile` and `tlsKeyFile` for its own TLS listener. Device and remote-interface clients
+require verified HTTPS. Local messaging interfaces use the OS-protected socket. For a private CA, configure `backend.caFile` or
 CLI `--ca-file`; redirects and environment proxy inheritance are disabled.
 
 On the child host:
@@ -117,9 +115,9 @@ All secret values must remain outside the Nix store. Supply runtime **path strin
 not Nix path literals or `builtins.readFile` of a secret. Configure sops-nix, agenix
 or another runtime provider in `nix-config`. Backend secrets must be readable by
 `family-controls-backend`; Telegram and Matrix secrets by their corresponding
-service users; the enrollment token by root. Use distinct random interface
-credentials. The backend and each interface need the same respective credential
-value, but can receive separate files with appropriately restricted ownership.
+service users; the enrollment token by root. Local adapters need only their
+provider credentials. Remote adapters additionally need a distinct backend
+credential shared with the corresponding backend interface entry.
 
 ## Bootstrap and device approval
 
@@ -213,10 +211,16 @@ For Matrix use `"interface":"matrix"` and the full `@parent:example.net` ID.
 Use CLI `api … --method POST --body-file FILE` to submit these JSON bodies.
 Existing accounts can explicitly link OIDC through `/api/v1/identities/oidc` with
 `issuer`, `subject` and `account`; email claims do not merge accounts. Revoking an
-account invalidates its access and cancels commands not yet committed on a device.
+account invalidates future access. Previously committed child policy changes
+remain in effect, including changes awaiting device delivery.
 The last approved administrator cannot be revoked.
 
 ## Optional interfaces
+
+On the backend host, transport defaults to `local`. Nix creates the service users,
+socket group and `/run/family-controls-backend/adapters.sock`; kernel peer
+credentials select the adapter identity. Public HTTP never accepts that shortcut.
+No adapter-to-backend token is required. Parent sender linking still applies.
 
 Telegram:
 
@@ -225,10 +229,6 @@ services.family-controls.interfaces.telegram = {
   enable = true;
   botTokenFile = "/run/secrets/telegram-bot";
   settings = {
-    backend = {
-      url = "https://family.example.net";
-      tokenFile = "/run/secrets/telegram-backend";
-    };
     parentGroupChatId = "-1001234567890";
     children = [ "alex" ];
   };
@@ -245,10 +245,6 @@ Matrix, including Element X as the parent's client:
 services.family-controls.interfaces.matrix = {
   enable = true;
   settings = {
-    backend = {
-      url = "https://family.example.net";
-      tokenFile = "/run/secrets/matrix-backend";
-    };
     homeserver = "https://matrix.example.net";
     userId = "@family-bot:example.net";
     deviceId = "FAMILYBOT";
@@ -268,6 +264,44 @@ refuses sending to unverified devices. Preserve `/var/lib/family-controls-matrix
 including its encryption store and sync cursor. Do not reuse a parent account's
 session or reset the bot's crypto store on every restart. An encryption-setting
 mismatch blocks outgoing messages; encrypted mode rejects plaintext commands.
+
+For an adapter on another host, select `transport = "remote"` and set its
+`settings.backend = { url = "https://family.example.net"; tokenFile = "/run/secrets/adapter-backend"; };`.
+On the backend, configure a matching `settings.interfaces.telegram = {
+kind = "telegram"; tokenFile = "/run/secrets/adapter-backend"; };` (or Matrix).
+Local mode requires an enabled backend on the same host.
+
+## Shared allowance and upgrade boundary
+
+Each child has an `assignments` list; each device/account pair belongs to exactly
+one child. One OS account per child per device is supported; shared computers use
+separate OS accounts for different children. Configure the same child policy and
+timezone on each assigned device and enroll/approve each device separately.
+
+`backend.settings.allocationSeconds` defaults to 300 (range 60–3600). Smaller
+allocations reduce disconnected exposure but require more frequent connectivity.
+Idle devices retain up to 30 seconds to start an activity. Unused credit is returned
+only after local enforcement has been reduced. A disconnected device keeps its
+reservation; offline reductions take effect on reconnect or exhaustion. Native
+Timekpr polling and termination grace can produce an overrun, which is counted.
+`agent.timekprCountdownSeconds` defaults to 60; the VM tests use 2 seconds. This
+is an enforcement grace period, separate from the five/one-minute child warnings.
+
+Timekpr saves its consumed-time counter periodically; the report can lag live use.
+Unreported usage remains reserved and is not inferred from a changing limit.
+Usage reports retain original dates across offline days. Active time covers sampled
+unlocked, non-idle graphical sessions; unmetered active time is a subset of active
+time. Neither is added to metered time. Unobserved intervals and pre-installation
+days are unknown, not zero. Weekly reports label partial coverage.
+
+This is a hard cut of the child-policy schema. Back up backend and agent state
+before deployment. A backend database containing the former singular `device` /
+`user` policy shape is rejected with a migration error; this release does not
+silently convert or delete it. Convert that policy metadata deliberately before
+activation, preserving usage, identities and commands. Do not delete device
+accounting state to recover a connection: its daily epoch prevents replay of an
+old allocation after state loss. Restore the matching backup; otherwise no new
+credit is granted for that device until a new accounting day.
 
 ## Operations and verification
 

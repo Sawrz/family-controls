@@ -11,6 +11,7 @@ let
           services.family-controls.interfaces = {
             telegram = {
               enable = enabled;
+              transport = "remote";
               botTokenFile = "/run/secrets/bot";
               settings = {
                 backend = {
@@ -23,6 +24,7 @@ let
             };
             matrix = {
               enable = enabled;
+              transport = "remote";
               settings = {
                 backend = {
                   url = "https://family.example.net";

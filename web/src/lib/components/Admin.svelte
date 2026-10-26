@@ -15,7 +15,7 @@
   let invited = $state(''),
     method = $state('password'),
     role = $state('parent');
-  let deviceId = $state(untrack(() => children[0]?.policy.device ?? ''));
+  let deviceId = $state(untrack(() => children[0]?.policy.assignments[0]?.device ?? ''));
   let linkAccount = $state(''),
     kind = $state('telegram'),
     external = $state(''),
@@ -23,7 +23,9 @@
   let revokeTarget = $state<{ kind: 'accounts' | 'devices'; id: string } | null>(null);
   const api = new Api(),
     t = (key: Message) => translate(language, key);
-  const deviceNames = $derived([...new Set(children.map((c) => c.policy.device))]);
+  const deviceNames = $derived([
+    ...new Set(children.flatMap((c) => c.policy.assignments.map((a) => a.device))),
+  ]);
   async function refresh() {
     try {
       const [a, d] = await Promise.all([
