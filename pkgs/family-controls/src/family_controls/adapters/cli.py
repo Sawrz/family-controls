@@ -1,13 +1,16 @@
 """Command-line adapter for local child requests and authenticated parent actions."""
 
 import argparse
+import hashlib
 import json
+import os
+import secrets
 import sys
 from pathlib import Path
 from uuid import uuid4
 
 from ..application import ACTIONS, ADJUSTMENTS
-from ..config import BackendConnection
+from ..config import BackendConnection, secret
 from ..domain import InvalidCommand, Unavailable
 from .client import BackendClient
 from .http import unix_request
@@ -22,6 +25,14 @@ def main() -> None:
     parser.add_argument("--operation-id", help="Reuse this ID when retrying the same command")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
+    provision = subparsers.add_parser(
+        "device-credential", help="Create a private device token; print only its SHA-256 hash"
+    )
+    provision.add_argument("--output-token-file", required=True)
+    hash_token = subparsers.add_parser(
+        "device-credential-hash", help="Print the SHA-256 hash of an existing device token"
+    )
+    hash_token.add_argument("--input-token-file", required=True)
     login = subparsers.add_parser("login")
     login.add_argument("--username", required=True)
     login.add_argument("--password-file", required=True)
@@ -66,7 +77,19 @@ def main() -> None:
         payload["requestId"] = args.request_id
     operation = args.operation_id or str(uuid4())
     try:
-        if args.command in {"status", "request-time", "cancel-request"}:
+        if args.command == "device-credential":
+            token = secrets.token_urlsafe(32)
+            descriptor = os.open(
+                args.output_token_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            with os.fdopen(descriptor, "w") as output:
+                output.write(token + "\n")
+            result = {"credentialHash": hashlib.sha256(token.encode()).hexdigest()}
+        elif args.command == "device-credential-hash":
+            result = {
+                "credentialHash": hashlib.sha256(secret(args.input_token_file).encode()).hexdigest()
+            }
+        elif args.command in {"status", "request-time", "cancel-request"}:
             result = unix_request(
                 args.socket_path,
                 "/v1/" + args.command,

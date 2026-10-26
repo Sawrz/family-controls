@@ -2,7 +2,7 @@
 
 `checks.web-journeys` deploys three fresh NixOS guests on an uncached build:
 
-- **Backend:** the packaged FastAPI service, HTTPS Nginx web module and Chromium.
+- **Backend:** FastAPI, the HTTP web listener, an external HTTPS proxy and Chromium.
 - **Child computer:** the agent, real Timekpr/logind, two separate child accounts,
   the packaged request window, Dunst and an isolated Xvfb/Openbox desktop.
 - **Laptop:** a second real agent/Timekpr/logind host assigned to the same child.
@@ -13,7 +13,8 @@ actual process termination. The suite does not substitute the enforcement port.
 
 The journeys cover:
 
-1. Parent sign-in, browser-created enrollment token and explicit device approval.
+1. Parent sign-in through an external HTTPS proxy and the module’s HTTP listener;
+   two declarative devices connect and enroll without invitations or approval.
 2. A custom grant applied to today's Timekpr allowance, a lost HTTP response,
    reload and safe retry without granting twice or changing a sibling's budget.
 3. Five-minute and one-minute native notifications, the notification's request
@@ -28,6 +29,8 @@ The journeys cover:
    breakdowns in English desktop and German mobile layouts.
 8. Both computers disconnected during metered use, exhausting their reserved
    credit locally and reconciling usage after reconnection.
+9. Credential rotation and removal reject old/cross-device tokens and preserve
+   weekly usage through backend restarts.
 
 These are ordered stages in one disposable household. Run the whole check;
 later stages deliberately retain enrollment, session and command-history state.
@@ -56,7 +59,7 @@ silently converted into skips. Credentials and certificates are disposable test
 fixtures. The browser accepts the fixture's self-signed certificate; agent and
 Nginx upstream certificate verification remain enabled.
 
-The verified run on 2026-10-26 passed all eight journeys in 299.09 seconds. Pytest
+The verified run on 2026-10-26 passed all nine journeys in 263.28 seconds. Pytest
 treats warnings as errors. After pytest completes, the pinned Nix test driver can
 emit resource-cleanup warnings during its own teardown; the successful run exited
 with status zero. No dependency code was modified or warnings suppressed.
@@ -73,7 +76,13 @@ Sources: [VM deployment](../tests/web-vm.nix) and
 [pytest journeys](../tests/web_vm/test_journeys.py).
 
 The final run’s artifacts are in
-`/nix/store/7sd714psrvs15lz9gdvmmwmv4l2cxrxm-vm-test-run-family-controls-web-journeys`.
+`/nix/store/c0w2lilr80v26v3vyngbxk9di0yn41gr-vm-test-run-family-controls-web-journeys`.
 `request-approved.png` captures the child’s usage and shared balance; the final
 child capture is blank after the later session-termination journey. Browser
 reports, JUnit results and three journals remain available in that output.
+
+The suite also rotates and removes a declarative credential through backend
+configuration/restarts, rejects old and cross-device tokens, and checks that
+weekly usage survives. The separate central VM suite retains manual enrollment
+and messaging-adapter workflows. Browser checks exercise OIDC callback routing
+through both proxy hops with a controlled provider; no live household IdP is used.

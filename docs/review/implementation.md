@@ -7,6 +7,36 @@ runtime databases or external chat accounts were changed. `AGENTS.md` and extern
 changes to this repository’s core package and summed simultaneous device usage.
 
 
+## Declarative enrollment and web deployment
+
+Configured devices authenticate with unique bearer tokens over verified HTTPS.
+The server is provisioned with only precomputed SHA-256 hashes and authorized
+account mappings; the first valid connection enrolls automatically. Host metadata
+can be exported with `lib.trustedDevicesFromHosts`, without exporting secrets or
+requiring a shared repository or secret provider. Manual invitation enrollment
+remains available for hosts outside declarative trust.
+
+Rotation and removal invalidate prior credentials while preserving accounting,
+policy and command state. A removed host's reservations remain bounded by the
+existing offline allocation rules. Configuration-managed device rows explain
+where access is changed and omit inapplicable manual approval controls. Desktop
+and phone captures were visually reviewed after the VM run.
+
+The web module now provides `listenAddress`/`listenPort` for an internal HTTP
+listener. The deployment owns external TLS and access restrictions; `publicUrl`
+remains the external HTTPS origin. Assets, API, OIDC callback routing and SSE are
+preserved through both proxy hops. The package overlay contributes no packages
+on unsupported platforms; i686 package-set evaluation is covered explicitly.
+
+The final `nix flake check --offline -L` passed all 11 x86_64 checks. The packaged
+suite passed 225 tests with 79.45% coverage; the separate Matrix runtime check
+passed its SDK test. All 34 browser workflows passed through the external HTTPS
+proxy and internal HTTP listener. Nine real browser-to-device VM journeys passed
+in 263.28 seconds, including derived assignments, token rotation, removal and
+retained usage. The central VM suite also passed; both supported architectures
+passed flake evaluation (`--all-systems --no-build`). No aarch64 VM execution is
+claimed. Runtime artifacts are recorded in [VM journeys](../vm-user-journeys.md).
+
 ## Shared allowance implementation
 
 A child’s policy targets a validated list of device/account assignments. The
@@ -52,7 +82,7 @@ flake-parts feature files.
 
 REST commands and reports are paired with persisted, resumable SSE streams.
 Devices enforce cached policy offline and acknowledge applied results. Device
-registration consumes a short-lived token and remains pending until an admin
+manual registration consumes a short-lived token and remains pending until an admin
 approves it. Scoped credentials can be revoked and replaced by reenrollment.
 Command identity survives backend/device restarts and uncertain delivery. Parent changes commit once centrally and remain pending until assigned devices
 acknowledge the policy. Revoking a parent blocks future actions without undoing
@@ -102,20 +132,20 @@ Verified on 2026-10-26:
 
 | Check | Result |
 | --- | --- |
-| Packaged pytest suite | 209 passed; one Matrix SDK test runs separately |
-| Branch-aware coverage | 79.00%, above the 70% gate |
+| Packaged pytest suite | 225 passed; one Matrix SDK test runs separately |
+| Branch-aware coverage | 79.45%, above the 70% gate |
 | Actual encrypted Matrix SDK runtime | 1 passed on Python 3.14, including crypto-store shutdown |
-| Full x86_64 `nix flake check` | All 10 checks passed, including both VM suites, packages, interfaces and desktop wiring |
+| Full x86_64 `nix flake check` | All 11 checks passed, including both VM suites, packages, interfaces and desktop wiring |
 | x86_64/aarch64 output evaluation | Passed with `--all-systems --no-build`; ARM runtime not tested |
-| Ruff, additional S/SIM/C4 rules, mypy, Nix formatting and whitespace | Passed |
+| Configured Ruff checks, mypy, Nix formatting and whitespace | Passed |
 | Earlier locked-dependency advisory audit | 49 Python packages and npm lock audited with no known vulnerabilities reported; dependency locks are unchanged in this implementation |
-| Parent web browser workflows | 34 passed locally and against the Nix-built package through HTTPS Nginx |
-| Browser-to-device VM journeys | 8 passed in 299.09 seconds across three fresh NixOS guests, with real Timekpr enforcement and native child UI |
-| Frontend execution coverage | 98.73% statements, 88.49% branches from source-mapped Chromium V8 coverage |
+| Parent web browser workflows | 34 passed against the Nix-built package through external HTTPS and internal HTTP |
+| Browser-to-device VM journeys | 9 passed in 263.28 seconds across three fresh NixOS guests, with real Timekpr enforcement and native child UI |
+| Earlier frontend execution coverage | 98.73% statements, 88.49% branches; not remeasured for this change |
 | Web static checks | Svelte/TypeScript: zero errors or warnings; formatting and production build passed |
 | Web accessibility and layout | Axe WCAG A/AA and overflow checks passed at desktop, 390px and 320px, including German |
 
-The web interface's independent Impeccable review scored scope labeling, allowance
+The web interface's earlier independent Impeccable review scored scope labeling, allowance
 previews and design provenance resolved, with a final `ship` disposition for those
 fixes. Automated accessibility checks do not replace manual assistive-technology
 testing. This extension also changes the authorized core and central accounting.
@@ -132,7 +162,7 @@ The suite includes:
 - Packaged Python 3.13 tests with real HTTPS, Unix sockets, SQLite, Tk/Xvfb and a
   private freedesktop notification service. The encrypted Matrix composition
   root additionally runs against its actual Python 3.14/Vodozemac SDK package.
-- Ruff formatting/configured checks, additional production security/style rules,
+- Ruff formatting/configured checks,
   mypy and Nix formatting.
 - Separate package builds, validated Telegram/Matrix service configurations,
   enabled/disabled module checks and Home Manager wiring fixtures.
@@ -144,11 +174,11 @@ The suite includes:
 - A separate browser-to-device run with Chromium and HTTPS Nginx on the backend
   VM (2,048 MiB), the native child UI on the managed-device VM (1,536 MiB), and a
   second managed laptop (1,536 MiB) sharing the same child allowance.
-  Eight ordered journeys cover browser enrollment/approval, a custom grant with
+  Nine ordered journeys cover automatic declarative enrollment, a custom grant with
   lost-response retry, five/one-minute warnings and a child request, real activity
   termination at exhaustion, extensions/unlimited/blocking, queued delivery
   through a backend restart, routine persistence, simultaneous usage, weekly reports
-  and bounded offline credit on both computers.
+  bounded offline credit on both computers, and credential rotation/removal.
   Screenshots, JUnit results and all three journals are saved in the check output.
   See [VM user journeys](../vm-user-journeys.md) for reproduction and boundaries.
 - Hash-locked PyPI runtime advisory audit: 49 packages, no known vulnerabilities

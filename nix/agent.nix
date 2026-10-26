@@ -158,8 +158,10 @@
             stateDir
             deviceId
             enrollmentTokenFile
+            credentialFile
             backend
             ;
+          accounts = mapAttrs (_: account: account.child) cfg.accounts;
           socketPath = "/run/family-controls/control.sock";
           socketGroup = "family-controls";
         };
@@ -236,6 +238,28 @@
           type = types.str;
           default = config.networking.hostName;
         };
+        credentialFile = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Runtime bearer-token file for automatic declarative enrollment. No secret provider is assumed.";
+        };
+        credentialHash = mkOption {
+          type = types.nullOr (types.strMatching "[0-9a-f]{64}");
+          default = null;
+          description = "Public SHA-256 token hash exported by lib.trustedDevicesFromHosts. Never computed from a secret during evaluation.";
+        };
+        accounts = mkOption {
+          type = types.attrsOf (
+            types.submodule {
+              options.child = mkOption {
+                type = types.str;
+                description = "Household child identity for this local account.";
+              };
+            }
+          );
+          default = { };
+          description = "Expected local-account-to-child mappings, checked against backend policy.";
+        };
         enrollmentTokenFile = mkOption {
           type = types.nullOr types.str;
           default = null;
@@ -252,6 +276,15 @@
 
       config = mkIf cfg.enable {
         assertions = [
+          {
+            assertion = cfg.credentialFile == null || (cfg.enrollmentTokenFile == null && cfg.accounts != { });
+            message = "Declarative agents need accounts and credentialFile, without enrollmentTokenFile.";
+          }
+          {
+            assertion =
+              cfg.accounts == { } || builtins.attrNames cfg.accounts == builtins.attrNames cfg.managedUsers;
+            message = "Agent accounts must match managedUsers.";
+          }
           {
             assertion = config.time.timeZone != null;
             message = "family-controls.agent requires an explicit time.timeZone so schedules and daily expiry share one timezone.";

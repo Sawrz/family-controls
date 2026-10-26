@@ -311,12 +311,7 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
 
     @app.get("/api/v1/devices")
     def devices(identity: Admin) -> dict:
-        return {
-            "devices": [
-                {"device": key, **{k: v for k, v in value.items() if k != "credential"}}
-                for key, value in backend.store.items("devices")
-            ]
-        }
+        return {"devices": backend.devices()}
 
     @app.post("/api/v1/devices/{device_id}/approve")
     def device_approve(device_id: str, identity: Admin) -> dict:

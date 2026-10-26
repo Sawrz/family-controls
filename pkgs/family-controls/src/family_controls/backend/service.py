@@ -41,6 +41,12 @@ class Backend:
         self.usage = UsageLedger(store, config.allocationSeconds)
         # Nix provides the initial desired policies. Later changes are centrally persisted.
         with store.transaction():
+            for device, record in store.items("devices"):
+                if record.get("managedBy") == "configuration":
+                    trust = config.trustedDevices.get(device)
+                    if trust is None or record["credential"] != trust.credentialHash:
+                        record["status"] = "revoked"
+                        store.put("devices", device, record)
             for child, policy in config.children.items():
                 validate_policy(policy.policy)
                 existing = store.get("policies", child)
@@ -95,6 +101,8 @@ class Backend:
         return result
 
     def enrollment_token(self, device: str, actor: str) -> str:
+        if device in self.config.trustedDevices:
+            raise Conflict("Device enrollment is managed by configuration")
         if device not in {a.device for c in self.config.children.values() for a in c.assignments}:
             raise InvalidCommand("Configure a child assigned to this device first")
         token = secrets.token_urlsafe(32)
@@ -116,6 +124,8 @@ class Backend:
         return token
 
     def enroll(self, request: Enrollment) -> dict:
+        if request.device in self.config.trustedDevices:
+            raise Conflict("Device enrollment is managed by configuration")
         with self.store.transaction():
             existing = self.store.get("devices", request.device)
             credential_hash = digest(request.credential.get_secret_value())
@@ -149,14 +159,61 @@ class Backend:
         return {"device": request.device, "status": "pending"}
 
     def authenticate_device(self, device: str, credential: str) -> dict:
-        record = self.store.get("devices", device)
-        if not record or record["credential"] != digest(credential):
-            raise Unauthorized("Invalid device credentials")
-        if record["status"] != "approved":
-            raise Forbidden("Device is not approved")
-        return record
+        """Authenticate and idempotently register a declaratively authorized device."""
+        supplied = digest(credential)
+        with self.store.transaction():
+            record = self.store.get("devices", device)
+            trust = self.config.trustedDevices.get(device)
+            if trust:
+                if not secrets.compare_digest(trust.credentialHash, supplied):
+                    raise Unauthorized("Invalid device credentials")
+                if (
+                    not record
+                    or record["credential"] != supplied
+                    or record["status"] != "approved"
+                    or record.get("managedBy") != "configuration"
+                ):
+                    record = {
+                        **(record or {}),
+                        "credential": supplied,
+                        "status": "approved",
+                        "managedBy": "configuration",
+                        "policyRevision": (record or {}).get("policyRevision", 0),
+                        "enrolledAt": (record or {}).get(
+                            "enrolledAt", self.clock.now().isoformat()
+                        ),
+                    }
+                    self.store.put("devices", device, record)
+                    self.emit(
+                        "device.approved", {"device": device, "actor": "configuration"}, device
+                    )
+                return record
+            if not record or not secrets.compare_digest(record["credential"], supplied):
+                raise Unauthorized("Invalid device credentials")
+            if record.get("managedBy") == "configuration" or record["status"] != "approved":
+                raise Forbidden("Device is not approved")
+            return record
+
+    def devices(self) -> list[dict]:
+        """Expose enrollment state without credentials, including hosts not connected yet."""
+        records = dict(self.store.items("devices"))
+        for device in self.config.trustedDevices:
+            records.setdefault(device, {"status": "configured", "enrolledAt": None})
+        return [
+            {
+                **{k: v for k, v in record.items() if k != "credential"},
+                "device": device,
+                "managedBy": "configuration"
+                if device in self.config.trustedDevices
+                or record.get("managedBy") == "configuration"
+                else "parent",
+            }
+            for device, record in records.items()
+        ]
 
     def device_decision(self, device: str, approve: bool, actor: str) -> dict:
+        if device in self.config.trustedDevices:
+            raise Conflict("Device authorization is managed by configuration")
         with self.store.transaction():
             record = self.store.get("devices", device)
             if not record:
@@ -268,7 +325,7 @@ class Backend:
                     "policyRevision": report.get("revision", 0),
                 }
             )
-        online = all(d["connectivity"] == "online" for d in devices)
+        online = bool(devices) and all(d["connectivity"] == "online" for d in devices)
         limit = self.limit(child, state)
         balance = self.usage.balance(child, now.date(), limit)
         pending = [
@@ -295,9 +352,12 @@ class Backend:
             else "idle",
             "connectivity": "online" if online else "offline",
             "lastSeen": last_seen,
-            "application": {"status": "pending" if pending else "applied", "error": None},
+            "application": {
+                "status": "pending" if pending or not devices else "applied",
+                "error": None,
+            },
             "delivery": {"pending": len(pending), "status": "pending" if pending else "idle"},
-            "policyDelivery": "pending" if pending else "applied",
+            "policyDelivery": "pending" if pending or not devices else "applied",
             "blocked": bool(state.blocked_until),
             "muted": state.muted,
             "unlimitedToday": state.unlimited,

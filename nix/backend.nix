@@ -12,6 +12,7 @@
       raw = json.generate "family-controls-backend.json" (
         cfg.settings
         // {
+          trustedDevices = cfg.trustedDevices;
           adapterSocketPath = "/run/family-controls-backend/adapters.sock";
           localAdapters = lib.listToAttrs (
             lib.concatMap
@@ -62,6 +63,24 @@
     {
       options.services.family-controls.backend = {
         enable = lib.mkEnableOption "Family Controls central API";
+        trustedDevices = lib.mkOption {
+          type = lib.types.attrsOf (
+            lib.types.submodule {
+              options = {
+                credentialHash = lib.mkOption {
+                  type = lib.types.strMatching "[0-9a-f]{64}";
+                  description = "SHA-256 of this device's random bearer token, computed before deployment.";
+                };
+                accounts = lib.mkOption {
+                  type = lib.types.attrsOf lib.types.str;
+                  description = "Authorized local username to household child identity mapping.";
+                };
+              };
+            }
+          );
+          default = { };
+          description = "Declaratively approved devices. Removing an entry revokes its access; no plaintext device tokens are stored here.";
+        };
         settings = lib.mkOption {
           type = json.type;
           default = { };
@@ -76,6 +95,12 @@
         };
       };
       config = lib.mkIf cfg.enable {
+        assertions = [
+          {
+            assertion = !(cfg.settings ? trustedDevices);
+            message = "Use services.family-controls.backend.trustedDevices, not settings.trustedDevices.";
+          }
+        ];
         users.groups.family-controls-backend = { };
         users.groups.family-controls-adapters = { };
         users.users.family-controls-backend = {

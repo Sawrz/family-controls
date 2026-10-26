@@ -311,7 +311,12 @@ const messages = {
   language: ['Language', 'Sprache'],
   administrator: ['Household administration', 'Haushaltsverwaltung'],
   accounts: ['Parent accounts', 'Elternkonten'],
-  devices: ['Device approval', 'Gerätefreigabe'],
+  devices: ['Devices', 'Geräte'],
+  configured: ['Waiting for first connection', 'Wartet auf die erste Verbindung'],
+  configurationManaged: [
+    'Managed by configuration. Contact your administrator to change access.',
+    'Über die Konfiguration verwaltet. Wende dich für Zugriffsänderungen an die Administration.',
+  ],
   approve: ['Approve', 'Freigeben'],
   revoke: ['Revoke access', 'Zugang entziehen'],
   parent: ['Parent', 'Elternteil'],

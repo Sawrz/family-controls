@@ -16,7 +16,7 @@
           "overrideDerivation"
         ];
   };
-  flake.overlays.default = final: prev: self.packages.${prev.stdenv.hostPlatform.system};
+  flake.overlays.default = _: prev: self.packages.${prev.stdenv.hostPlatform.system} or { };
   flake.nixosModules.default = {
     imports = [
       config.flake.nixosModules.agent

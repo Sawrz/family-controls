@@ -71,7 +71,7 @@ class Assignment(Model):
 
 
 class ChildPolicy(Model):
-    assignments: list[Assignment] = Field(min_length=1, max_length=32)
+    assignments: list[Assignment] = Field(default_factory=list, max_length=32)
     timezone: str = "Europe/Berlin"
     policy: User
 
@@ -90,6 +90,13 @@ class InterfaceCredential(Model):
     tokenFile: str
 
 
+class TrustedDevice(Model):
+    """Public device trust; private bearer tokens never belong in this configuration."""
+
+    credentialHash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    accounts: dict[Identifier, Identifier] = Field(min_length=1, max_length=100)
+
+
 class BackendConfig(Model):
     stateDir: str = "/var/lib/family-controls-backend"
     publicUrl: str
@@ -99,6 +106,7 @@ class BackendConfig(Model):
     tlsKeyFile: str | None = None
     authentication: Authentication
     children: dict[Identifier, ChildPolicy] = Field(min_length=1)
+    trustedDevices: dict[Identifier, TrustedDevice] = Field(default_factory=dict)
     interfaces: dict[Identifier, InterfaceCredential] = Field(default_factory=dict)
     staleSeconds: Annotated[int, Field(ge=10, le=300)] = 30
     allocationSeconds: Annotated[int, Field(ge=60, le=3600)] = 300
@@ -108,6 +116,7 @@ class BackendConfig(Model):
 
     @model_validator(mode="after")
     def topology(self) -> "BackendConfig":
+        """Derive assignments from trusted hosts and validate the household topology."""
         from urllib.parse import urlsplit
 
         url = urlsplit(self.publicUrl)
@@ -115,6 +124,31 @@ class BackendConfig(Model):
             raise ValueError("publicUrl must be an HTTPS origin")
         if url.username or url.password or url.query or url.fragment:
             raise ValueError("publicUrl must not contain credentials, query or fragment")
+        hashes = [trust.credentialHash for trust in self.trustedDevices.values()]
+        if len(set(hashes)) != len(hashes):
+            raise ValueError("Each trusted device requires its own credential")
+        assignments = {name: list(child.assignments) for name, child in self.children.items()}
+        for device, trust in self.trustedDevices.items():
+            expected = set(trust.accounts.items())
+            existing = {
+                (assignment.user, child)
+                for child, entries in assignments.items()
+                for assignment in entries
+                if assignment.device == device
+            }
+            if existing and existing != expected:
+                raise ValueError("Trusted device accounts conflict with child assignments")
+            for user, child in trust.accounts.items():
+                if child not in assignments:
+                    raise ValueError("Trusted device references an unknown child")
+                if not existing:
+                    assignments[child].append(Assignment(device=device, user=user))
+        self.children = {
+            name: ChildPolicy.model_validate(
+                {**child.model_dump(), "assignments": assignments[name]}
+            )
+            for name, child in self.children.items()
+        }
         pairs = [(a.device, a.user) for child in self.children.values() for a in child.assignments]
         if len(set(pairs)) != len(pairs):
             raise ValueError("Each device/user must have exactly one child identity")

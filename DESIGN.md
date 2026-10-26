@@ -292,6 +292,13 @@ an explicit confirmation checkbox before their primary action becomes available.
 The panel’s heading receives focus when opened, and the preview remains in the
 form flow on phones.
 
+### Configuration-managed devices
+
+Device rows retain the existing record-list layout. They show the connection or
+approval state and explain that configuration controls access. Manual approval,
+revocation and invitation controls are omitted for these devices. Text wraps on
+phones; no new visual tokens or layout variants are introduced.
+
 ## Do's and Don'ts
 
 ### Do:

@@ -624,3 +624,132 @@ def test_child_request_changes_during_sync_are_not_overwritten(central, monkeypa
     assert central.backend.status("child")["request"]["status"] == (
         "pending" if action == "request-time" else "cancelled"
     )
+
+
+@pytest.fixture
+def declarative(central):
+    from family_controls.backend.accounts import digest
+    from family_controls.backend.models import TrustedDevice
+
+    central.config.trustedDevices["device"] = TrustedDevice(
+        credentialHash=digest("device-secret" * 4),
+        accounts={name: name for name in central.setup.config.managedUsers},
+    )
+    return central
+
+
+def test_declarative_first_connection_approves_once_without_invitation(declarative):
+    c = declarative.client
+    configured = c.get("/api/v1/devices").json()["devices"]
+    assert configured == [
+        {
+            "device": "device",
+            "status": "configured",
+            "enrolledAt": None,
+            "managedBy": "configuration",
+        }
+    ]
+    for _ in range(2):
+        response = c.post(
+            "/api/v1/devices/device/sync",
+            json={"policyRevision": 0},
+            headers={"Authorization": "Bearer " + "device-secret" * 4},
+        )
+        assert response.status_code == 200
+    records = c.get("/api/v1/devices").json()["devices"]
+    assert records[0]["status"] == "approved" and "credential" not in records[0]
+    assert (
+        len([e for e in declarative.store.events("parents", 0) if e["kind"] == "device.approved"])
+        == 1
+    )
+    for action in ("invitation", "approve", "revoke"):
+        assert c.post(f"/api/v1/devices/device/{action}").status_code == 409
+
+
+@pytest.mark.parametrize("device,token", [("device", "wrong"), ("other", "device-secret" * 4)])
+def test_declarative_credential_is_bound_to_device(declarative, device, token):
+    response = declarative.client.post(
+        f"/api/v1/devices/{device}/sync",
+        json={"policyRevision": 0},
+        headers={"Authorization": "Bearer " + token},
+    )
+    assert response.status_code == 401
+    assert declarative.store.items("devices") == []
+
+
+def test_rotation_removal_and_readdition_preserve_usage_and_enrollment(declarative):
+    from family_controls.backend.accounts import Forbidden, Unauthorized, digest
+
+    backend = declarative.backend
+    first = backend.authenticate_device("device", "device-secret" * 4)
+    declarative.store.put("usage", "retained", {"playSeconds": 123})
+    backend.config.trustedDevices["device"].credentialHash = digest("replacement" * 4)
+    restarted = Backend(backend.config, declarative.store, declarative.setup.clock, validate_user)
+    with pytest.raises(Unauthorized):
+        restarted.authenticate_device("device", "device-secret" * 4)
+    assert (
+        restarted.authenticate_device("device", "replacement" * 4)["enrolledAt"]
+        == first["enrolledAt"]
+    )
+    trust = backend.config.trustedDevices.pop("device")
+    restarted = Backend(backend.config, declarative.store, declarative.setup.clock, validate_user)
+    with pytest.raises(Forbidden):
+        restarted.authenticate_device("device", "replacement" * 4)
+    assert declarative.store.get("devices", "device")["status"] == "revoked"
+    backend.config.trustedDevices["device"] = trust
+    assert restarted.authenticate_device("device", "replacement" * 4)["status"] == "approved"
+    assert declarative.store.get("usage", "retained") == {"playSeconds": 123}
+
+
+def test_trusted_host_accounts_derive_assignments_without_mutating_input(declarative):
+    raw = declarative.config.model_dump()
+    for child in raw["children"].values():
+        child.pop("assignments")
+    parsed = BackendConfig.model_validate(raw)
+    assert all(c.assignments[0].device == "device" for c in parsed.children.values())
+    assert all("assignments" not in c for c in raw["children"].values())
+    assert BackendConfig.model_validate(parsed.model_dump()) == parsed
+
+
+@pytest.mark.parametrize(
+    "fault", ["hash", "unknown-child", "conflicting-account", "shared-credential"]
+)
+def test_invalid_declarative_topology_is_rejected(declarative, fault):
+    from pydantic import ValidationError
+
+    raw = declarative.config.model_dump()
+    trust = raw["trustedDevices"]["device"]
+    if fault == "hash":
+        trust["credentialHash"] = "plaintext-is-not-a-hash"
+    elif fault == "unknown-child":
+        trust["accounts"]["child"] = "missing"
+    elif fault == "conflicting-account":
+        trust["accounts"]["another"] = "child"
+    else:
+        raw["trustedDevices"]["other"] = trust
+    with pytest.raises(ValidationError):
+        BackendConfig.model_validate(raw)
+
+
+def test_agent_rejects_unexpected_child_mapping_before_accepting_policy(central):
+    sync = agent(central)
+    central.setup.config.agent.accounts = {
+        name: "unexpected" for name in central.setup.config.managedUsers
+    }
+    with pytest.raises(ValueError, match="child mapping"):
+        sync.exchange()
+    assert central.setup.repository.relay_get("backend-policy", None) is None
+
+
+def test_removing_last_assignment_keeps_child_history_and_unknown_status(central):
+    raw = central.config.model_dump()
+    for child in raw["children"].values():
+        child["assignments"] = []
+    config = BackendConfig.model_validate(raw)
+    backend = Backend(config, central.store, central.setup.clock, validate_user)
+    status = backend.status("child")
+    assert status["devices"] == []
+    assert status["application"]["status"] == "pending"
+    assert status["policyDelivery"] == "pending"
+    assert status["connectivity"] == "offline"
+    assert status["remainingPlayTimeSeconds"] is None

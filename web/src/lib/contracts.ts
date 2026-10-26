@@ -125,8 +125,9 @@ export type HistoryEvent = z.infer<typeof history>['events'][number] & { child: 
 export const device = z.object({
   device: z.string(),
   status: z.string(),
-  enrolledAt: z.string(),
-  policyRevision: z.number(),
+  enrolledAt: z.string().nullable(),
+  policyRevision: z.number().default(0),
+  managedBy: z.enum(['configuration', 'parent']).default('parent'),
 });
 export type Device = z.infer<typeof device>;
 export const actions = [

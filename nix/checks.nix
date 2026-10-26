@@ -97,6 +97,7 @@
               python3 -m pytest pkgs/family-controls/tests/test_matrix_runtime.py
               touch "$out"
             '';
+        enrollment = import ../tests/enrollment.nix { inherit self pkgs; };
         interfaces = import ../tests/interfaces.nix { inherit self pkgs; };
         home-manager = import ../tests/home-manager.nix { inherit self pkgs; };
         integration = pkgs.testers.runNixOSTest (import ../tests/nixos.nix { inherit self; });
