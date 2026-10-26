@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount } from 'svelte';
   import { z } from 'zod';
   import { Api, errorKey } from '../api';
   import { account, device, type Account, type Device, type Child } from '../contracts';
@@ -15,7 +15,7 @@
   let invited = $state(''),
     method = $state('password'),
     role = $state('parent');
-  let deviceId = $state(untrack(() => children[0]?.policy.assignments[0]?.device ?? ''));
+  let deviceId = $state('');
   let linkAccount = $state(''),
     kind = $state('telegram'),
     external = $state(''),
@@ -24,7 +24,13 @@
   const api = new Api(),
     t = (key: Message) => translate(language, key);
   const deviceNames = $derived([
-    ...new Set(children.flatMap((c) => c.policy.assignments.map((a) => a.device))),
+    ...new Set(
+      children
+        .flatMap((c) => c.policy.assignments.map((a) => a.device))
+        .filter(
+          (name) => !devices.some((d) => d.device === name && d.managedBy === 'configuration'),
+        ),
+    ),
   ]);
   async function refresh() {
     try {
@@ -34,6 +40,7 @@
       ]);
       accounts = a.accounts;
       devices = d.devices;
+      if (!deviceNames.includes(deviceId)) deviceId = deviceNames[0] ?? '';
     } catch (e) {
       error = errorKey(e);
     }
@@ -131,13 +138,16 @@
         <div>
           <strong>{item.device}</strong>
           <p class="help">{t(item.status as Message)}</p>
+          {#if item.managedBy === 'configuration'}<p class="help">
+              {t('configurationManaged')}
+            </p>{/if}
         </div>
         <div class="form-actions">
-          {#if item.status === 'pending'}<button
+          {#if item.managedBy !== 'configuration' && item.status === 'pending'}<button
               disabled={busy}
               onclick={() => send(`/api/v1/devices/${encodeURIComponent(item.device)}/approve`)}
               >{t('approve')}</button
-            >{/if}{#if item.status !== 'revoked'}<button
+            >{/if}{#if item.managedBy !== 'configuration' && item.status !== 'revoked'}<button
               disabled={busy}
               onclick={() => (revokeTarget = { kind: 'devices', id: item.device })}
               >{t('revoke')}</button
@@ -165,19 +175,19 @@
         ></label
       ><button class="primary" disabled={busy}>{t('invite')}</button>
     </form>
-    <form
-      onsubmit={(event) => {
-        event.preventDefault();
-        void send(`/api/v1/devices/${encodeURIComponent(deviceId)}/invitation`);
-      }}
-    >
-      <h3>{t('enroll')}</h3>
-      <label
-        >{t('computers')}<select aria-label={t('computers')} bind:value={deviceId} required
-          >{#each deviceNames as name}<option value={name}>{name}</option>{/each}</select
-        ></label
-      ><button class="primary" disabled={busy || !deviceId}>{t('enroll')}</button>
-    </form>
+    {#if deviceNames.length}<form
+        onsubmit={(event) => {
+          event.preventDefault();
+          void send(`/api/v1/devices/${encodeURIComponent(deviceId)}/invitation`);
+        }}
+      >
+        <h3>{t('enroll')}</h3>
+        <label
+          >{t('computers')}<select aria-label={t('computers')} bind:value={deviceId} required
+            >{#each deviceNames as name}<option value={name}>{name}</option>{/each}</select
+          ></label
+        ><button class="primary" disabled={busy || !deviceId}>{t('enroll')}</button>
+      </form>{/if}
     <form onsubmit={link}>
       <h3>{t('linkIdentity')}</h3>
       <label

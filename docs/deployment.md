@@ -5,6 +5,11 @@ backend, device agent and chosen interfaces together. The bilingual parent web
 interface covers daily controls, schedules and administration; see the
 [web deployment guide](web-interface.md). The admin API and CLI also cover setup.
 
+For preauthorized hosts, use [declarative bearer-token enrollment](declarative-enrollment.md):
+configure the agent's runtime token file and the server's precomputed hash and
+account mappings. The invitation workflow below is the alternative for manual
+onboarding, not an additional step for declaratively trusted devices.
+
 ## Nix layers
 
 Import `inputs.family-controls.nixosModules.default` on each participating host.
@@ -119,7 +124,7 @@ service users; the enrollment token by root. Local adapters need only their
 provider credentials. Remote adapters additionally need a distinct backend
 credential shared with the corresponding backend interface entry.
 
-## Bootstrap and device approval
+## Bootstrap and manual device approval
 
 The bootstrap password is at least 12 characters. It is read only when creating
 the initial administrator; changing its file does not reset an existing account.

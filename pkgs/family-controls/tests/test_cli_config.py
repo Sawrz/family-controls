@@ -135,3 +135,61 @@ def test_build_configuration_validation_does_not_open_runtime_services(
     relay_main()
     assert not (tmp_path / "agent.lock").exists()
     assert not (tmp_path / "relay.sqlite").exists()
+
+
+def test_device_credential_generation_hash_and_no_overwrite(monkeypatch, tmp_path, capsys):
+    import hashlib
+
+    path = tmp_path / "device-token"
+    command = ["ctl", "device-credential", "--output-token-file", str(path)]
+    monkeypatch.setattr(sys, "argv", command)
+    cli.main()
+    output = capsys.readouterr().out
+    token = secret(str(path))
+    assert len(token) >= 43 and token not in output
+    assert path.stat().st_mode & 0o777 == 0o600
+    expected = {"credentialHash": hashlib.sha256(token.encode()).hexdigest()}
+    assert json.loads(output) == expected
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert secret(str(path)) == token
+    monkeypatch.setattr(
+        sys, "argv", ["ctl", "device-credential-hash", "--input-token-file", str(path)]
+    )
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_declarative_client_reads_runtime_credentials_without_creating_state(setup, tmp_path):
+    from family_controls.agent import device_client
+
+    token = tmp_path / "token"
+    token.write_text("first-token")
+    setup.config.agent.credentialFile = str(token)
+    setup.config.agent.backend = BackendConnection(url="https://backend")
+    setup.config.agent.stateDir = str(tmp_path / "unused-state")
+    client = device_client(setup.config)
+    assert client.headers() == {"Authorization": "Bearer first-token"}
+    token.write_text("rotated-token")
+    assert client.headers() == {"Authorization": "Bearer rotated-token"}
+    assert not (tmp_path / "unused-state").exists()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"credentialFile": ""},
+        {"credentialFile": "/run/token"},
+        {
+            "credentialFile": "/run/token",
+            "accounts": {"child": "child"},
+            "enrollmentTokenFile": "/run/invite",
+        },
+    ],
+)
+def test_incomplete_declarative_credentials_cannot_fall_back_to_manual_enrollment(settings):
+    from family_controls.config import AgentSettings
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        AgentSettings.model_validate(settings)

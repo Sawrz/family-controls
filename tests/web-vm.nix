@@ -10,24 +10,48 @@
   ];
 
   nodes.backend = { pkgs, ... }: {
-    services.family-controls.backend.settings.children.child.assignments = lib.mkForce [
-      {
-        device = "machine";
-        user = "child";
-      }
-      {
-        device = "laptop";
-        user = "child";
-      }
-    ];
+    # All device/account assignments come from trustedDevices in this deployment.
+    services.family-controls.backend.settings.children.child.assignments = lib.mkForce [ ];
+    services.family-controls.backend.settings.children.sibling.assignments = lib.mkForce [ ];
     services.family-controls.backend.settings.publicUrl = lib.mkForce "https://backend";
     services.family-controls.interfaces.web = {
       enable = true;
       hostName = "backend";
       backendUrl = "https://web-upstream:18450";
       backendCAFile = "/run/family-test-tls/server.crt";
+      listenAddress = "127.0.0.1";
+      listenPort = 18080;
+    };
+    # Deployment-owned HTTPS proxy in front of the module's HTTP listener.
+    services.nginx.virtualHosts.edge = {
+      onlySSL = true;
+      serverName = "backend";
+      listen = [
+        {
+          addr = "0.0.0.0";
+          port = 443;
+          ssl = true;
+        }
+      ];
       sslCertificate = "/run/family-test-tls/server.crt";
       sslCertificateKey = "/run/family-test-tls/server.key";
+      locations."/" = {
+        proxyPass = "http://127.0.0.1:18080";
+        extraConfig = "proxy_set_header Host backend; proxy_buffering off; proxy_read_timeout 60s;";
+      };
+    };
+    services.family-controls.backend.trustedDevices = {
+      machine = {
+        credentialHash = builtins.hashString "sha256" "vm-machine-declarative-token-000000000000";
+        accounts = {
+          child = "child";
+          sibling = "sibling";
+        };
+      };
+      laptop = {
+        credentialHash = builtins.hashString "sha256" "vm-laptop-declarative-token-0000000000000";
+        accounts.child = "child";
+      };
     };
     systemd.services.nginx = {
       after = [ "family-test-tls.service" ];
@@ -71,7 +95,17 @@
 
   nodes.laptop = { ... }: {
     imports = [ (import ./nixos.nix { inherit self; }).nodes.machine ];
-    services.family-controls.agent.deviceId = lib.mkForce "laptop";
+    services.family-controls.agent = {
+      deviceId = lib.mkForce "laptop";
+      enrollmentTokenFile = lib.mkForce null;
+      credentialFile = "/etc/device-token";
+      backend.url = lib.mkForce "https://backend";
+      accounts.child.child = "child";
+    };
+    environment.etc."device-token" = {
+      text = "vm-laptop-declarative-token-0000000000000";
+      mode = "0600";
+    };
     services.family-controls.agent.managedUsers = lib.mkForce {
       child = {
         blockTTYLogin = false;
@@ -91,6 +125,19 @@
   };
 
   nodes.machine = { pkgs, ... }: {
+    services.family-controls.agent = {
+      enrollmentTokenFile = lib.mkForce null;
+      credentialFile = "/etc/device-token";
+      backend.url = lib.mkForce "https://backend";
+      accounts = {
+        child.child = "child";
+        sibling.child = "sibling";
+      };
+    };
+    environment.etc."device-token" = {
+      text = "vm-machine-declarative-token-000000000000";
+      mode = "0600";
+    };
     fonts.packages = [ pkgs.dejavu_fonts ];
     environment.systemPackages = [
       pkgs.xdotool

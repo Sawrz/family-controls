@@ -46,6 +46,9 @@ class AgentSync:
             },
         )
         policies = result["policies"]
+        expected = self.service.config.agent.accounts
+        if expected and {policy["user"]: child for child, policy in policies.items()} != expected:
+            raise InvalidCommand("Backend child mapping differs from configured device accounts")
         users = {policy["user"]: policy["policy"] for policy in policies.values()}
         if set(users) != set(self.service.config.managedUsers):
             raise InvalidCommand("Backend assignment must match configured local users")
@@ -92,6 +95,10 @@ class AgentSync:
 def device_client(config: AgentConfig) -> BackendClient:
     if config.agent.backend is None:
         raise InvalidCommand("An outbound backend connection is required")
+    if config.agent.credentialFile:
+        return BackendClient(
+            config.agent.backend.model_copy(update={"tokenFile": config.agent.credentialFile})
+        )
     credential_path = Path(config.agent.stateDir) / "device-credential"
     if not credential_path.exists():
         credential_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

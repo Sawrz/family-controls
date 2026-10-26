@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -68,7 +69,7 @@ class Enforcement:
 
 @pytest.fixture
 def household(tmp_path, request):
-    backend_port, web_port = port(), port()
+    backend_port, web_port, listener_port = port(), port(), port()
     origin = f"https://127.0.0.1:{web_port}"
     password = tmp_path / "password"
     password.write_text(PASSWORD)
@@ -94,7 +95,19 @@ def household(tmp_path, request):
             },
         }
     )
-    clock = SystemClock("Europe/Berlin")
+
+    class DaytimeClock(SystemClock):
+        """Keep time-of-day controls deterministic, including late-night test runs."""
+
+        def __init__(self):
+            super().__init__("Europe/Berlin")
+            now = super().now()
+            self.offset = now.replace(hour=12, minute=0, second=0, microsecond=0) - now
+
+        def now(self) -> datetime:
+            return super().now() + self.offset
+
+    clock = DaytimeClock()
     store = BackendStore(str(tmp_path / "backend.sqlite"))
     request.addfinalizer(store.close)
     backend = Backend(config, store, clock, validate_user)
@@ -205,6 +218,15 @@ http {{
     listen 127.0.0.1:{web_port} ssl;
     server_name 127.0.0.1;
     ssl_certificate {cert}; ssl_certificate_key {key};
+    location / {{
+      proxy_pass http://127.0.0.1:{listener_port};
+      proxy_set_header Host $http_host;
+      proxy_buffering off;
+    }}
+  }}
+  server {{
+    listen 127.0.0.1:{listener_port};
+    server_name 127.0.0.1;
     {snippet}
   }}
 }}

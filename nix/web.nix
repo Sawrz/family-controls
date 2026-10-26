@@ -75,7 +75,7 @@
         };
         hostName = lib.mkOption {
           type = lib.types.str;
-          description = "HTTPS host matching the backend publicUrl.";
+          description = "Virtual host name for the supplied web routes. The backend publicUrl remains the external HTTPS origin.";
         };
         backendUrl = lib.mkOption {
           type = lib.types.str;
@@ -87,14 +87,15 @@
           default = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           description = "CA bundle for an HTTPS backend; certificate verification stays enabled.";
         };
-        enableACME = lib.mkEnableOption "ACME certificates for the web host";
-        sslCertificate = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
+        listenAddress = lib.mkOption {
+          type = lib.types.str;
+          default = "127.0.0.1";
+          description = "HTTP listener address. External TLS termination and access restrictions belong to the deployment.";
         };
-        sslCertificateKey = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
+        listenPort = lib.mkOption {
+          type = lib.types.port;
+          default = 18451;
+          description = "HTTP listener port, independent of the backend publicUrl.";
         };
         authentication = lib.mkOption {
           type = lib.types.submodule {
@@ -134,14 +135,6 @@
       config = lib.mkIf cfg.enable {
         assertions = [
           {
-            assertion = cfg.enableACME || (cfg.sslCertificate != null && cfg.sslCertificateKey != null);
-            message = "Family Controls web requires ACME or an explicit TLS certificate and key.";
-          }
-          {
-            assertion = !backend.enable || (backend.settings.publicUrl or "") == "https://${cfg.hostName}";
-            message = "Family Controls web hostName must match the backend HTTPS publicUrl.";
-          }
-          {
             assertion =
               builtins.match "https://[^/[:space:]]+|http://(127[.]0[.]0[.]1|localhost)(:[0-9]+)?" cfg.backendUrl
               != null;
@@ -150,8 +143,13 @@
         ];
         services.nginx.enable = true;
         services.nginx.virtualHosts.${cfg.hostName} = {
-          forceSSL = true;
-          inherit (cfg) enableACME sslCertificate sslCertificateKey;
+          listen = [
+            {
+              addr = cfg.listenAddress;
+              port = cfg.listenPort;
+              ssl = false;
+            }
+          ];
           extraConfig = snippet;
         };
       };

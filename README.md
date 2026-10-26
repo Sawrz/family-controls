@@ -136,6 +136,10 @@ The local socket exposes only status, request and cancellation for its peer UID.
 
 This is a hard cut: old modules, options, executables and direct device HTTPS
 endpoints are replaced. Update the consuming `nix-config` before activation.
+Preauthorized hosts support [automatic declarative enrollment](docs/declarative-enrollment.md)
+with a per-device bearer token and a precomputed server-side hash. The optional
+web module exposes a configurable internal HTTP listener behind your HTTPS proxy.
+
 See [deployment and enrollment](docs/deployment.md) for complete configuration,
 authentication, secret ownership and approval instructions. No live configuration
 or production state is changed by this repository's tests.

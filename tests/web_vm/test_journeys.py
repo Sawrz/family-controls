@@ -151,32 +151,33 @@ def household(vm_nodes):
             assert not errors, errors
 
 
-def test_enrollment_requires_parent_approval_in_browser(household):
+def test_declarative_enrollment_through_external_https_proxy(household):
     home, page = household, household.page
     expect(home.row().get_by_text("Unknown", exact=True)).to_be_visible()
     home.navigate("Settings")
-    form = page.locator("form").filter(
-        has=page.get_by_role("heading", name="Create device enrollment token")
-    )
+    expect(page.get_by_role("heading", name="Create device enrollment token")).to_have_count(0)
     cert = home.nodes.backend.succeed("cat /var/lib/family-controls-backend/server.crt")
-    previous_token = ""
     for name in ("machine", "laptop"):
-        form.get_by_label("Computers").select_option(name)
-        form.get_by_role("button", name="Create device enrollment token").click()
-        expect(page.get_by_label("Copy this token now")).not_to_have_value(previous_token)
-        token = page.get_by_label("Copy this token now").input_value()
-        previous_token = token
-        assert token
+        device = page.locator(".record-list li").filter(has=page.get_by_text(name, exact=True))
+        expect(device.get_by_text("Waiting for first connection", exact=True)).to_be_visible()
+        expect(device.get_by_role("button")).to_have_count(0)
         node = getattr(home.nodes, name)
         node.succeed("printf %s " + shlex.quote(cert) + " > /etc/backend-ca.crt")
-        node.succeed("printf %s " + shlex.quote(token) + " > /etc/enrollment-token")
-        node.succeed("chmod 600 /etc/enrollment-token; systemctl start family-controls-agent")
-        device = page.locator(".record-list li").filter(has=page.get_by_text(name, exact=True))
-        expect(device.get_by_role("button", name="Approve")).to_be_visible(timeout=45000)
-        assert home.reported()["connectivity"] != "online"
-        device.get_by_role("button", name="Approve").click()
+        node.succeed("systemctl start family-controls-agent")
     home.budget(60)
     assert home.local("sibling")["effectiveDailyLimitMinutes"] == 60
+    for name in ("machine", "laptop"):
+        device = page.locator(".record-list li").filter(has=page.get_by_text(name, exact=True))
+        expect(device.get_by_text("Approved", exact=True)).to_be_visible()
+    home.screenshot("declarative-devices-desktop.png")
+    page.set_viewport_size({"width": 390, "height": 844})
+    home.screenshot("declarative-devices-phone.png")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    for device in home.read("/api/v1/devices")["devices"]:
+        assert device["status"] == "approved" and device["managedBy"] == "configuration"
+    home.nodes.backend.succeed(
+        "curl --fail --silent -H 'Host: backend' http://127.0.0.1:18080/web-config.json"
+    )
 
 
 def test_custom_extension_survives_lost_response_without_double_grant(household):
@@ -401,8 +402,17 @@ def test_two_computers_share_usage_and_weekly_report(household):
 def test_disconnected_computers_exhaust_only_their_reserved_credit(household):
     home, page = household, household.page
     page.get_by_label("Sprache", exact=True).select_option("en")
+    # Both enforcers must observe the previous activities stopping before we
+    # shrink the shared budget and wait for the redistributed idle allocations.
+    home.wait(lambda s: all(not d["status"]["localUsage"]["needsTime"] for d in s["devices"]))
     home.change("set-remaining", 1)
-    home.wait(lambda s: s["delivery"]["pending"] == 0 and s["reservedSeconds"] <= 60)
+    home.wait(
+        lambda s: (
+            s["delivery"]["pending"] == 0
+            and s["reservedSeconds"] <= 60
+            and all(d["status"]["remainingPlayTimeSeconds"] >= 10 for d in s["devices"])
+        )
+    )
     home.start_game()
     laptop = home.nodes.laptop
     laptop.succeed("systemctl start family-test-session-child")
@@ -427,3 +437,71 @@ def test_disconnected_computers_exhaust_only_their_reserved_credit(household):
     assert status["reportedUsedSeconds"] + status["reservedSeconds"] >= before
     home.nodes.machine.succeed("systemctl stop family-test-game")
     laptop.succeed("systemctl stop family-test-game")
+
+
+def test_device_rotation_and_removal_preserve_reports(household):
+    """Deploy changed trust, restart, and exercise real authenticated device requests."""
+    import hashlib
+    import re
+
+    home = household
+    backend, machine = home.nodes.backend, home.nodes.machine
+    before = home.read("/api/v1/children/child/usage")
+    unit = backend.succeed("systemctl cat family-controls-backend")
+    command = shlex.split(re.search(r"^ExecStart=(.+)$", unit, re.MULTILINE).group(1))
+    index = command.index("--config") + 1
+    original = json.loads(backend.succeed("cat " + shlex.quote(command[index])))
+    runtime = "/var/lib/family-controls-backend/test-config.json"
+    command[index] = runtime
+    override = "[Service]\nExecStart=\nExecStart=" + shlex.join(command) + "\n"
+    backend.succeed("mkdir -p /run/systemd/system/family-controls-backend.service.d")
+    backend.succeed(
+        "printf %s "
+        + shlex.quote(override)
+        + " > /run/systemd/system/family-controls-backend.service.d/test.conf"
+    )
+
+    def deploy(config):
+        backend.succeed("printf %s " + shlex.quote(json.dumps(config)) + " > " + runtime)
+        backend.succeed("chown family-controls-backend:family-controls-backend " + runtime)
+        backend.succeed("chmod 600 " + runtime)
+        backend.succeed("systemctl daemon-reload")
+        backend.succeed("systemctl restart family-controls-backend")
+        backend.wait_for_open_port(18450)
+
+    def request_status(token, device="machine"):
+        return backend.succeed(
+            "curl --silent --output /dev/null --write-out '%{http_code}' --cacert /var/lib/family-controls-backend/server.crt "
+            "-H "
+            + shlex.quote("Authorization: Bearer " + token)
+            + " -H 'Content-Type: application/json' "
+            "-d '{\"policyRevision\":0}' https://backend:18450/api/v1/devices/" + device + "/sync"
+        ).strip()
+
+    rotated = "vm-rotated-machine-token-0000000000000000"
+    original["trustedDevices"]["machine"]["credentialHash"] = hashlib.sha256(
+        rotated.encode()
+    ).hexdigest()
+    machine.succeed("systemctl stop family-controls-agent")
+    deploy(original)
+    assert request_status("vm-machine-declarative-token-000000000000") == "401"
+    assert request_status(rotated, "laptop") == "401"
+    machine.succeed("rm /etc/device-token")
+    machine.succeed("umask 077; printf %s " + shlex.quote(rotated) + " > /etc/device-token")
+    machine.succeed("systemctl start family-controls-agent")
+    home.wait(lambda s: s["connectivity"] == "online")
+    assert request_status(rotated) == "200"
+    del original["trustedDevices"]["machine"]
+    deploy(original)
+    assert request_status(rotated) == "403"
+    home.wait(lambda s: all(d["device"] != "machine" for d in s["devices"]))
+    after = home.read("/api/v1/children/child/usage")
+    assert sum(day["playSeconds"] or 0 for day in after["days"]) >= sum(
+        day["playSeconds"] or 0 for day in before["days"]
+    )
+    assert (
+        next(d for d in home.read("/api/v1/devices")["devices"] if d["device"] == "machine")[
+            "status"
+        ]
+        == "revoked"
+    )

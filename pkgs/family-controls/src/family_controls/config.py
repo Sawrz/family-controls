@@ -108,11 +108,19 @@ class AgentSettings(Model):
     deviceId: Identifier = "device"
     backend: BackendConnection | None = None
     enrollmentTokenFile: str | None = None
+    credentialFile: Annotated[str, Field(min_length=1)] | None = None
+    accounts: dict[Identifier, Identifier] = Field(default_factory=dict)
     requestTimeoutSeconds: Positive = 5
     maxConnections: Annotated[int, Field(ge=1, le=128)] = 16
 
     @model_validator(mode="after")
     def network_backend(self) -> "AgentSettings":
+        if self.credentialFile and self.enrollmentTokenFile:
+            raise ValueError("Choose declarative credentials or invitation enrollment")
+        if self.credentialFile and not self.accounts:
+            raise ValueError("Declarative devices require account-to-child mappings")
+        if self.backend and self.backend.tokenFile:
+            raise ValueError("Use agent.credentialFile for device authentication")
         if self.backend and self.backend.socketPath:
             raise ValueError("Devices require an outbound HTTPS backend connection")
         return self
@@ -140,6 +148,8 @@ class AgentConfig(Model):
 
     @model_validator(mode="after")
     def valid_timezone(self) -> "AgentConfig":
+        if self.agent.accounts and set(self.agent.accounts) != set(self.managedUsers):
+            raise ValueError("Device accounts must match managed users")
         try:
             ZoneInfo(self.timezone)
         except (ZoneInfoNotFoundError, ValueError) as exc:

@@ -3,7 +3,7 @@
 The web interface is a separate `family-controls-web` package. It contains static
 SvelteKit/TypeScript files, with English and German UI text. Nginx serves it under
 the same HTTPS origin as the existing FastAPI API. No Node application server,
-additional policy store or changes to the core package are required.
+or additional policy store is required.
 
 ## Deploy with a local backend
 
@@ -14,16 +14,43 @@ and add:
 services.family-controls.interfaces.web = {
   enable = true;
   hostName = "family.example.net";
-  enableACME = true;
+  listenAddress = "127.0.0.1";
+  listenPort = 18451;
 };
 ```
 
-The backend's `settings.publicUrl` must be `https://family.example.net`. Configure
-NixOS ACME terms/contact and DNS normally, or supply `sslCertificate` and
-`sslCertificateKey` runtime paths instead of enabling ACME. The module enables
-Nginx and redirects HTTP to HTTPS. Configure the host firewall and remote access
-according to the installation's network policy. Do not expose the loopback
-backend port separately.
+Keep the backend's `settings.publicUrl = "https://family.example.net"` regardless
+of the internal listener address or port. The module serves assets, API routes,
+OIDC callback handling and SSE over HTTP. Configure external TLS, certificates,
+firewall and access restrictions in the consuming configuration. For example:
+
+```nix
+services.nginx.virtualHosts.family-public = {
+  serverName = "family.example.net";
+  forceSSL = true;
+  enableACME = true;
+  locations."/" = {
+    proxyPass = "http://127.0.0.1:18451";
+    extraConfig = ''
+      proxy_set_header Host family.example.net;
+      proxy_buffering off;
+      proxy_read_timeout 60s;
+    '';
+  };
+};
+```
+
+Configure ACME contact/terms and networking in your deployment. Another reverse
+proxy can forward the same routes. Preserve the external Host, Cookie, Origin and
+Authorization headers; disable response buffering for SSE. The supplied listener
+forwards the fixed public HTTPS scheme to the backend, not the internal HTTP
+scheme or an untrusted client-provided header. Authentication, secure cookies and
+OIDC redirect URLs continue to use the external HTTPS origin. HTTP is only the
+internal deployment hop; agents still require verified HTTPS.
+
+The former web `enableACME`, `sslCertificate` and `sslCertificateKey` options are
+removed. Move them to your external virtual host. There is no implicit firewall
+opening or HTTP-to-HTTPS redirect on the internal listener.
 
 The default upstream is `http://127.0.0.1:<backend port>`. Set `backendUrl` and,
 if necessary, `backendCAFile` for an HTTPS upstream. Remote upstreams must use
@@ -40,7 +67,8 @@ services.family-controls.interfaces.web = {
   enable = true;
   hostName = "family.example.net";
   backendUrl = "https://backend.internal.example.net";
-  enableACME = true;
+  listenAddress = "127.0.0.1";
+  listenPort = 18451;
   authentication = {
     password = { login = true; registration = false; };
     oidc = { login = true; registration = true; };
@@ -70,8 +98,9 @@ The four password/OIDC login/registration switches remain independent.
   The current backend history response does not include command amounts or
   reason text; the web interface does not invent them.
 - **Settings:** choose language. Administrators can approve/revoke parent
-  accounts and enrolled devices, create invitations/enrollment tokens and link
-  Telegram, Matrix or OIDC identities. Bootstrap remains a deployment operation.
+  accounts and manually enrolled devices, create invitations/enrollment tokens and link
+  Telegram, Matrix or OIDC identities. Declarative devices are labelled as managed
+  by configuration and enroll automatically. Bootstrap remains a deployment operation.
 
 Device/account assignments are configured in Nix. Shared computers need separate
 OS accounts for different children. A shared OS login cannot distinguish children;
