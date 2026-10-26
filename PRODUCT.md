@@ -54,7 +54,8 @@ and usability inspiration, not as binding visual references.
 The central service coordinates household accounts, desired policies and parent
 commands. NixOS device agents initiate outbound connections and enforce access
 through Timekpr. Devices remain authoritative for observed usage and applied
-policy; the backend persists desired changes and their delivery history.
+policy; the backend owns the shared allowance, allocation ledger and durable
+daily usage reports alongside desired changes and delivery history.
 
 Parents already have Telegram and Matrix interfaces, including use through an
 Element client. The web interface is an additional adapter to the central API.
@@ -68,6 +69,8 @@ Deployment and secret provisioning belong to the consuming Nix configuration.
 ## Capabilities and Constraints
 
 - View children, access status, remaining time, requests and recent command history.
+- Share a child’s allowance across devices; sum simultaneous metered usage.
+- Review seven-day usage totals, partial coverage and per-device breakdowns.
 - Add or deduct custom amounts of time; set total or remaining daily allowance.
 - Change today's cutoff, grant an immediate session, remove today's play budget,
   or allow access for the rest of the day.
@@ -88,7 +91,7 @@ Product terminology must retain meaningful distinctions:
 - **Restore defaults** preserves consumed time and manual blocks.
 - **Pending** is not **applied**. Offline or stale usage is unknown, not zero.
 
-Today-only changes expire at local midnight. Commands have expiry and durable
+Today-only changes expire at local midnight. Commands commit centrally with durable
 identities so uncertain delivery can be retried without granting time twice.
 Local enforcement continues offline, but remote changes require device delivery.
 The interface must communicate those limits without requiring parents to
@@ -102,9 +105,9 @@ enforcement adapter.
 The approved web scope includes daily controls, requests, recurring policies,
 history, authentication and account/device administration. Layouts adapt to
 household size and shared computers with separate operating-system accounts;
-allowances remain per computer/account. The selected direction is Today's family
-plan. Holiday
-schedules, weekday-specific budgets, timed pauses and usage summaries are backlog
+one allowance belongs to each child across their assigned computers. The selected
+direction is Today’s family plan, extended with weekly usage. Holiday
+schedules, weekday-specific budgets and timed pauses are backlog
 ideas, not delivered features or approved web requirements.
 
 ## Evidence on Hand

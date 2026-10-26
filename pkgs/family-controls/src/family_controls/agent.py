@@ -4,7 +4,6 @@ import logging
 import secrets
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 
 from .adapters.client import BackendClient
@@ -13,7 +12,7 @@ from .adapters.sqlite import Repository
 from .adapters.timekpr import validate_config
 from .application import Service
 from .config import AgentConfig, User, secret
-from .domain import Conflict, InvalidCommand, Unavailable
+from .domain import InvalidCommand, Unavailable
 
 LOG = logging.getLogger(__name__)
 
@@ -26,99 +25,47 @@ class AgentSync:
         self.policy_ready = False
 
     def exchange(self) -> None:
-        cached = self.repository.relay_get("backend-policy", {"revision": 0})
-        outcomes = self.repository.relay_get("backend-outcomes", {})
-        if not isinstance(cached, dict) or not isinstance(outcomes, dict):
-            raise InvalidCommand("Corrupt synchronization state")
-        if not self.policy_ready:
-            initial_results = [
-                self.service.reconcile(user, force=True)
-                for user in self.service.config.managedUsers
-            ]
-            self.policy_ready = all(initial_results)
+        from .local_usage import LocalUsage
+
+        if self.service.usage is None:
+            self.service.usage = LocalUsage(self.service)
+        usage = self.service.usage
+        for user in self.service.config.managedUsers:
+            self.service.reconcile(user)
         statuses = {user: self.service.status(user) for user in self.service.config.managedUsers}
-        applied = self.policy_ready and all(
-            s["application"]["status"] == "applied" for s in statuses.values()
-        )
-        for operation, outcome in outcomes.items():
-            receipt = self.repository.operation(operation)
-            if (
-                receipt
-                and outcome["status"] == "accepted"
-                and receipt[1] in {"applied", "superseded"}
-            ):
-                outcome["status"] = receipt[1]
+        reports = usage.reports()
+        cached = self.repository.relay_get("backend-policy", {"revision": 0})
+        if not isinstance(cached, dict):
+            raise InvalidCommand("Corrupt cached backend policy")
         result = self.client.request(
             self.route + "/sync",
             {
-                "policyRevision": cached["revision"] if applied else 0,
+                "policyRevision": cached["revision"],
                 "statuses": statuses,
-                "outcomes": list(outcomes.values())[:100],
+                "usage": reports,
             },
         )
-        # Outcomes remain until acknowledged by a successful exchange.
-        acknowledged = set(list(outcomes)[:100])
-        outcomes = {
-            key: value
-            for key, value in outcomes.items()
-            if key not in acknowledged or value["status"] == "accepted"
-        }
         policies = result["policies"]
         users = {policy["user"]: policy["policy"] for policy in policies.values()}
         if set(users) != set(self.service.config.managedUsers):
             raise InvalidCommand("Backend assignment must match configured local users")
         if any(p["timezone"] != self.service.config.timezone for p in policies.values()):
             raise InvalidCommand("Backend and device policy timezones differ")
+        candidate = self.service.config.model_copy(deep=True)
+        candidate.managedUsers = {user: User.model_validate(value) for user, value in users.items()}
+        validate_config(candidate)
         revision = sum(policy["revision"] for policy in policies.values())
-        if cached.get("users") != users or cached["revision"] != revision:
-            candidate = self.service.config.model_copy(deep=True)
-            candidate.managedUsers = {
-                user: User.model_validate(value) for user, value in users.items()
-            }
-            validate_config(candidate)
-            self.repository.relay_set("backend-policy", {"revision": revision, "users": users})
-            self.policy_ready = False
-            applied_users = []
-            for user, cfg in candidate.managedUsers.items():
-                with self.service.command_lock(user):
-                    self.service.config.managedUsers[user] = cfg
-                    self.service.last_apply.pop(user, None)
-                    applied_users.append(self.service.reconcile(user, force=True))
-            self.policy_ready = all(applied_users)
-        for command in result["commands"]:
-            operation = command["operationId"]
-            receipt = self.repository.operation(operation)
-            try:
-                if command["user"] not in users:
-                    raise InvalidCommand("Command targets an unassigned local user")
-                if not receipt and command.get("cancelled"):
-                    raise InvalidCommand("Submitting account was revoked before delivery")
-                if (
-                    not receipt
-                    and datetime.fromisoformat(command["expiresAt"]) <= self.service.clock.now()
-                ):
-                    outcome = {"operationId": operation, "status": "expired"}
-                else:
-                    self.service.execute(
-                        command["user"],
-                        command["action"],
-                        command["payload"],
-                        operation,
-                        command["actor"],
-                    )
-                    receipt = self.repository.operation(operation)
-                    outcome = {
-                        "operationId": operation,
-                        "status": receipt[1] if receipt and receipt[1] != "pending" else "accepted",
-                    }
-            except (Conflict, InvalidCommand, KeyError) as exc:
-                outcome = {"operationId": operation, "status": "failed", "error": str(exc)[:300]}
-            except Unavailable:
-                # Preserve ordering for commands that depend on fresh observations.
-                break
-            outcomes[operation] = outcome
-            self.repository.relay_set("backend-outcomes", outcomes)
-        self.repository.relay_set("backend-outcomes", outcomes)
+        self.repository.relay_set("backend-policy", {"revision": revision, "users": users})
+        for report in reports:
+            self.repository.relay_set(
+                f"usage-ack/{report['user']}/{report['day']}", report["sequence"]
+            )
+        for child, policy in policies.items():
+            usage.accept(
+                policy["user"],
+                {**policy, "child": child},
+                statuses[policy["user"]].get("request"),
+            )
 
     def run(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -135,8 +82,10 @@ class AgentSync:
                         last_sync = time.monotonic()
                         if event:
                             self.repository.relay_set("backend-cursor", {"id": event["id"]})
-            except (Unavailable, InvalidCommand, OSError):
-                LOG.warning("Backend synchronization unavailable; local enforcement continues")
+            except (Unavailable, InvalidCommand, OSError) as exc:
+                LOG.warning(
+                    "Backend synchronization unavailable; local enforcement continues: %s", exc
+                )
                 stop.wait(3)
 
 

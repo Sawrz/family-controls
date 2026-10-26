@@ -15,7 +15,7 @@ def connection(token):
     return BackendConnection(
         url="https://backend:18450",
         tokenFile=token,
-        caFile="/var/lib/family-controls-backend/server.crt",
+        caFile="/tmp/backend-ca.crt",
     )
 
 
@@ -29,7 +29,9 @@ class TelegramTransport:
 def test_interfaces_use_central_identity_and_queue(tmp_path):
     repository = Repository(str(tmp_path / "telegram.sqlite"))
     config = RelayConfig(
-        parentGroupChatId="-42", children=["child"], backend=connection("/etc/interface-token")
+        parentGroupChatId="-42",
+        children=["child"],
+        backend=BackendConnection(socketPath="/run/family-controls-backend/adapters.sock"),
     )
     gateway = Gateway(config.backend)
     relay = Relay(config, "bot", gateway, repository, SystemClock("UTC"), TelegramTransport())

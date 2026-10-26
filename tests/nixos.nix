@@ -77,7 +77,7 @@ in
       };
     virtualisation.memorySize = 1536;
   };
-  nodes.backend = { pkgs, ... }: {
+  nodes.backend = { pkgs, lib, ... }: {
     imports = [ self.nixosModules.default ];
     system.stateVersion = "25.11";
     time.timeZone = "Europe/Berlin";
@@ -92,6 +92,16 @@ in
         ps.pytest
       ]))
     ];
+    services.family-controls.interfaces.telegram = {
+      enable = true;
+      botTokenFile = "/etc/interface-token";
+      settings = {
+        parentGroupChatId = "-42";
+        children = [ "child" ];
+      };
+    };
+    # Run the adapter transport in pytest instead of contacting Telegram.
+    systemd.services.family-controls-telegram.wantedBy = lib.mkForce [ ];
     # Synthetic test credentials only; production uses runtime secret providers.
     environment.etc."admin-password" = {
       text = "isolated-test-password";
@@ -114,8 +124,12 @@ in
           map (name: {
             inherit name;
             value = {
-              device = "machine";
-              user = name;
+              assignments = [
+                {
+                  device = "machine";
+                  user = name;
+                }
+              ];
               timezone = "Europe/Berlin";
               policy = policy name;
             };
@@ -201,7 +215,9 @@ in
     with subtest("Telegram and Matrix pass through the real central API"):
         api("/api/v1/identities", {"interface": "telegram", "externalId": "501", "account": "admin"})
         api("/api/v1/identities", {"interface": "matrix", "externalId": "@parent:test", "account": "admin"})
-        backend.succeed("env PYTHONPATH=${../pkgs/family-controls/src} python3 -m pytest -q -p no:cacheprovider ${./relay_vm.py}")
+        backend.succeed("cp /var/lib/family-controls-backend/server.crt /tmp/backend-ca.crt; chmod 644 /tmp/backend-ca.crt")
+        backend.fail("curl --fail --silent --unix-socket /run/family-controls-backend/adapters.sock http://localhost/api/v1/children")
+        backend.succeed("runuser -u family-controls-telegram -- env PYTHONPATH=${../pkgs/family-controls/src} python3 -m pytest -q -p no:cacheprovider ${./relay_vm.py}")
         wait_budget(72)
         command("restore-today")
         wait_budget(60)
@@ -252,7 +268,7 @@ in
         assert command("add-time", {"minutes": 10}, "crash")["duplicate"]
         wait_budget(70)
 
-    with subtest("midnight and stop restoration work without central connectivity"):
+    with subtest("midnight and stopping cannot restore unallocated household credit"):
         command("allow-today")
         backend.wait_until_succeeds(base + " remote-status child | python3 -c \"import json,sys; assert json.load(sys.stdin)['unlimitedToday']\"", timeout=30)
         machine.succeed("iptables -I OUTPUT -p tcp --dport 18450 -j REJECT")
@@ -260,6 +276,6 @@ in
         machine.wait_until_succeeds("runuser -u child -- family-controlsctl status | python3 -c \"import json,sys; s=json.load(sys.stdin); assert not s['unlimitedToday'] and s['effectiveDailyLimitMinutes']==60\"", timeout=30)
         machine.succeed("systemctl stop family-controls-agent")
         info = machine.succeed("timekpra --userinfo child")
-        assert "PLAYTIME_LIMITS_PER_WEEKDAYS: 3600;3600;3600;3600;3600;3600;3600" in info
+        assert "PLAYTIME_LIMITS_PER_WEEKDAYS: 0;0;0;0;0;0;0" in info
   '';
 }

@@ -60,6 +60,10 @@ class Household:
             )
         )
         assert self.local()["effectiveDailyLimitMinutes"] == minutes
+        laptop = json.loads(
+            self.nodes.laptop.succeed("runuser -u child -- family-controlsctl status")
+        )
+        assert laptop["effectiveDailyLimitMinutes"] == minutes
         return result
 
     def navigate(self, label):
@@ -97,15 +101,24 @@ class Household:
         )
 
     def start_game(self):
+        # A manual block ends the logind session. Emulate the child signing in
+        # again before launching an activity after access is restored.
+        self.nodes.machine.succeed("systemctl start family-test-session-child")
         self.nodes.machine.succeed("systemctl stop family-test-game.service || true")
         self.nodes.machine.succeed(
             "systemd-run --unit family-test-game --property=RemainAfterExit=yes --uid child "
             "/run/current-system/sw/bin/python3 -c 'import time; time.sleep(600)' family-test-game"
         )
-        self.nodes.machine.wait_until_succeeds(
-            "timekpra --userinfo child | grep -q 'ACTUAL_ACTIVE_PLAYTIME_ACTIVITY_COUNT: 1'",
-            timeout=30,
-        )
+        try:
+            self.nodes.machine.wait_until_succeeds(
+                "timekpra --userinfo child | grep -q 'ACTUAL_ACTIVE_PLAYTIME_ACTIVITY_COUNT: 1'",
+                timeout=30,
+            )
+        except Exception:
+            print(self.nodes.machine.succeed("timekpra --userinfo child"))
+            print(self.nodes.machine.succeed("cat /var/lib/timekpr/config/timekpr.child.conf"))
+            print(self.nodes.machine.succeed("systemctl status family-test-game --no-pager"))
+            raise
 
     def screenshot(self, name):
         self.page.screenshot(path=str(Path(os.environ["VM_ARTIFACTS"]) / name), full_page=True)
@@ -145,19 +158,23 @@ def test_enrollment_requires_parent_approval_in_browser(household):
     form = page.locator("form").filter(
         has=page.get_by_role("heading", name="Create device enrollment token")
     )
-    form.get_by_role("button", name="Create device enrollment token").click()
-    token = page.get_by_label("Copy this token now").input_value()
-    assert token
     cert = home.nodes.backend.succeed("cat /var/lib/family-controls-backend/server.crt")
-    home.nodes.machine.succeed("printf %s " + shlex.quote(cert) + " > /etc/backend-ca.crt")
-    home.nodes.machine.succeed("printf %s " + shlex.quote(token) + " > /etc/enrollment-token")
-    home.nodes.machine.succeed(
-        "chmod 600 /etc/enrollment-token; systemctl start family-controls-agent"
-    )
-    device = page.locator(".record-list li").filter(has=page.get_by_text("machine", exact=True))
-    expect(device.get_by_role("button", name="Approve")).to_be_visible(timeout=45000)
-    assert home.reported()["connectivity"] != "online"
-    device.get_by_role("button", name="Approve").click()
+    previous_token = ""
+    for name in ("machine", "laptop"):
+        form.get_by_label("Computers").select_option(name)
+        form.get_by_role("button", name="Create device enrollment token").click()
+        expect(page.get_by_label("Copy this token now")).not_to_have_value(previous_token)
+        token = page.get_by_label("Copy this token now").input_value()
+        previous_token = token
+        assert token
+        node = getattr(home.nodes, name)
+        node.succeed("printf %s " + shlex.quote(cert) + " > /etc/backend-ca.crt")
+        node.succeed("printf %s " + shlex.quote(token) + " > /etc/enrollment-token")
+        node.succeed("chmod 600 /etc/enrollment-token; systemctl start family-controls-agent")
+        device = page.locator(".record-list li").filter(has=page.get_by_text(name, exact=True))
+        expect(device.get_by_role("button", name="Approve")).to_be_visible(timeout=45000)
+        assert home.reported()["connectivity"] != "online"
+        device.get_by_role("button", name="Approve").click()
     home.budget(60)
     assert home.local("sibling")["effectiveDailyLimitMinutes"] == 60
 
@@ -188,8 +205,10 @@ def test_custom_extension_survives_lost_response_without_double_grant(household)
         if line.startswith("PLAYTIME_LIMITS_PER_WEEKDAYS:")
     )
     today = int(home.nodes.machine.succeed("date +%u").strip()) - 1
-    expected = ["3600"] * 7
-    expected[today] = "5220"
+    expected = ["0"] * 7
+    expected[today] = str(
+        home.local()["localUsage"]["issuedSeconds"] - home.local()["localUsage"]["returnedSeconds"]
+    )
     assert limits.split(";") == expected
     assert home.local("sibling")["effectiveDailyLimitMinutes"] == 60
     history = home.read("/api/v1/children/child/history")["events"]
@@ -240,7 +259,8 @@ def test_native_warnings_request_and_parent_decision(household):
     page.get_by_role("button", name="Send decision").click()
     home.wait(lambda s: s.get("pendingRequest") is None and s["delivery"]["pending"] == 0)
     assert home.local()["request"]["status"] == "approved"
-    assert home.local()["remainingPlayTimeSeconds"] > 16 * 60
+    assert home.local()["remainingCountdownSeconds"] > 16 * 60
+    assert home.local()["remainingPlayTimeSeconds"] <= 300
     home.ui("dunstctl close-all")
     assert "1 minute remaining" in home.ui("dunstctl history")
     home.ui("scrot /home/child/request-approved.png")
@@ -326,3 +346,84 @@ def test_saved_routine_reaches_device_and_survives_agent_restart(household):
     page.get_by_label("Language", exact=True).select_option("de")
     home.screenshot("german-routine-mobile.png")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_two_computers_share_usage_and_weekly_report(household):
+    home, page = household, household.page
+    page.get_by_label("Sprache", exact=True).select_option("en")
+    home.change("restore-today")
+    home.budget(75)
+    home.start_game()
+    laptop = home.nodes.laptop
+    laptop.succeed("systemctl start family-test-session-child")
+    laptop.succeed(
+        "systemd-run --unit family-test-game --property=RemainAfterExit=yes --uid child "
+        "/run/current-system/sw/bin/python3 -c 'import time; time.sleep(600)' family-test-game"
+    )
+    laptop.wait_until_succeeds(
+        "timekpra --userinfo child | grep -q 'ACTUAL_ACTIVE_PLAYTIME_ACTIVITY_COUNT: 1'",
+        timeout=30,
+    )
+    before = {
+        d["device"]: d["status"]["localUsage"]["playSeconds"] for d in home.reported()["devices"]
+    }
+    # Native saved counters flush independently. Wait for both computers'
+    # measured progress, not just a sum that one computer can satisfy alone.
+    status = home.wait(
+        lambda s: all(
+            d["status"]["localUsage"]["playSeconds"] >= before[d["device"]] + 10
+            for d in s["devices"]
+        )
+    )
+    assert len(status["devices"]) == 2
+    week = home.read("/api/v1/children/child/usage")
+    today = next(d for d in week["days"] if len(d["devices"]) == 2)
+    assert today["playSeconds"] == sum(d["playSeconds"] for d in today["devices"])
+    assert all(d["playSeconds"] > 0 for d in today["devices"])
+    assert status["reportedUsedSeconds"] + status["reservedSeconds"] <= 75 * 60
+    home.navigate("Weekly usage")
+    page.get_by_label("Account", exact=True).select_option("child")
+    expect(page.locator(".usage-days")).to_contain_text("Metered play time")
+    details = page.locator(".usage-days details").last
+    details.get_by_text("Computer details", exact=True).click()
+    expect(details).to_contain_text("laptop")
+    expect(details).to_contain_text("machine")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    home.screenshot("shared-weekly-desktop.png")
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.get_by_label("Language", exact=True).select_option("de")
+    home.screenshot("shared-weekly-mobile-de.png")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    home.nodes.machine.succeed("systemctl stop family-test-game")
+    laptop.succeed("systemctl stop family-test-game")
+
+
+def test_disconnected_computers_exhaust_only_their_reserved_credit(household):
+    home, page = household, household.page
+    page.get_by_label("Sprache", exact=True).select_option("en")
+    home.change("set-remaining", 1)
+    home.wait(lambda s: s["delivery"]["pending"] == 0 and s["reservedSeconds"] <= 60)
+    home.start_game()
+    laptop = home.nodes.laptop
+    laptop.succeed("systemctl start family-test-session-child")
+    laptop.succeed(
+        "systemd-run --unit family-test-game --property=RemainAfterExit=yes --uid child "
+        "/run/current-system/sw/bin/python3 -c 'import time; time.sleep(600)' family-test-game"
+    )
+    status = home.reported()
+    assert status["reservedSeconds"] <= 60
+    before = status["reportedUsedSeconds"]
+    home.nodes.machine.block()
+    laptop.block()
+    try:
+        for node in (home.nodes.machine, laptop):
+            node.wait_until_fails("pgrep -u child -f family-test-game", timeout=90)
+    finally:
+        home.nodes.machine.unblock()
+        laptop.unblock()
+    status = home.wait(
+        lambda s: s["connectivity"] == "online" and s["reportedUsedSeconds"] > before
+    )
+    assert status["reportedUsedSeconds"] + status["reservedSeconds"] >= before
+    home.nodes.machine.succeed("systemctl stop family-test-game")
+    laptop.succeed("systemctl stop family-test-game")

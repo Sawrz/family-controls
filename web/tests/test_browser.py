@@ -435,7 +435,7 @@ def test_accessibility_and_responsive_views(signed_in, household):
     page.get_by_label("Entscheidung", exact=True).select_option("deny")
     audit()
     page.get_by_role("button", name="Entscheidung senden").click()
-    expect(page.get_by_role("status")).to_contain_text("Wartet")
+    expect(page.locator(".alert[role=status]")).to_contain_text("Wartet")
     apply_device(household)
     page.get_by_role("navigation").get_by_role("button", name="Zeitpläne").click()
     page.get_by_label("Konto", exact=True).select_option("mia")
@@ -450,3 +450,65 @@ def test_accessibility_and_responsive_views(signed_in, household):
     expect(page.get_by_role("button", name="Anmelden", exact=True)).to_be_visible()
     audit()
     page.screenshot(path=str(screenshots / "login-mobile.png"), full_page=True)
+
+
+def test_weekly_usage_distinguishes_metrics_missing_days_and_device_detail(signed_in, household):
+    page = signed_in
+    page.get_by_role("navigation").get_by_role("button", name="Weekly usage", exact=True).click()
+    page.get_by_label("Account", exact=True).select_option("mia")
+    expect(page.locator(".usage-days")).to_contain_text("55 min Metered play time")
+    expect(page.locator(".usage-days")).to_contain_text("Active computer time: —")
+    expect(page.locator(".usage-days")).to_contain_text("incomplete coverage")
+    details = page.locator(".usage-days details").first
+    details.get_by_text("Computer details", exact=True).click()
+    expect(details).to_contain_text("shared-pc · mia")
+    capture(page, "weekly-desktop.png")
+    page.get_by_role("button", name="Previous week").click()
+    expect(page.locator(".usage-days")).to_contain_text("No usage report")
+    expect(page.locator(".usage-days progress")).to_have_count(0)
+    page.get_by_role("button", name="Next week").click()
+    expect(page.locator(".usage-days")).to_contain_text("55 min Metered play time")
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.get_by_label("Language", exact=True).select_option("de")
+    expect(page.get_by_role("heading", name="Wöchentliche Nutzung")).to_be_visible()
+    capture(page, "weekly-mobile-de.png")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_weekly_refresh_preserves_selection_and_recovers_from_failure(signed_in, household):
+    page = signed_in
+    page.get_by_role("navigation").get_by_role("button", name="Weekly usage", exact=True).click()
+    page.get_by_label("Account", exact=True).select_option("mia")
+    expect(page.locator(".usage-days")).to_contain_text("55 min Metered play time")
+    household.service.enforcer.used["mia"] = 56 * 60
+    apply_device(household)
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator(".usage-days")).to_contain_text("56 min Metered play time")
+    expect(page.get_by_label("Account", exact=True)).to_have_value("mia")
+    capture(page, "weekly-refreshed.png")
+    page.route(
+        "**/children/mia/usage*", lambda route: route.fulfill(status=503, json={"error": "offline"})
+    )
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("section[aria-busy] [role=alert]")).to_be_visible()
+    capture(page, "weekly-error.png")
+    page.unroute("**/children/mia/usage*")
+    page.locator("section[aria-busy]").get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator(".usage-days")).to_contain_text("56 min Metered play time")
+
+
+def test_weekly_removed_child_and_empty_household_clear_obsolete_reports(signed_in):
+    page = signed_in
+    page.get_by_role("navigation").get_by_role("button", name="Weekly usage", exact=True).click()
+    page.get_by_label("Account", exact=True).select_option("mia")
+    page.route("**/api/v1/children", lambda route: route.fulfill(json={"children": ["lina"]}))
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.get_by_label("Account", exact=True)).to_have_value("lina")
+    page.unroute("**/api/v1/children")
+    page.route("**/api/v1/children", lambda route: route.fulfill(json={"children": []}))
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.get_by_text("No children are configured.", exact=False)).to_be_visible()
+    expect(page.locator(".usage-days")).to_have_count(0)
+    expect(page.get_by_label("Account", exact=True)).to_have_count(0)
+    page.set_viewport_size({"width": 390, "height": 844})
+    capture(page, "weekly-empty-mobile.png")

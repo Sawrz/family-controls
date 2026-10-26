@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from pydantic import Field, ValidationError
 
-from .config import AgentConfig, Model
+from .config import AgentConfig, Model, User
 from .domain import (
     Conflict,
     InvalidCommand,
@@ -146,6 +146,9 @@ class Service:
         self.observations: dict[str, Observation] = {}
         self.errors: dict[str, str] = {}
         self.last_apply: dict[str, datetime] = {}
+        from .local_usage import LocalUsage
+
+        self.usage: LocalUsage | None = LocalUsage(self) if config.agent.backend else None
 
     @contextmanager
     def command_lock(self, user: str) -> Iterator[None]:
@@ -162,13 +165,16 @@ class Service:
 
     def policy(self, user: str, state: State, now: datetime) -> Policy:
         cfg = self.config.managedUsers[user]
-        return effective_policy(
+        policy = effective_policy(
             cfg.timeWindows.for_day(now.isoweekday()),
             cfg.timeWindows.for_day(now.isoweekday(), homework=True),
             cfg.playTime.dailyLimitMinutes * 60,
             state,
             now,
         )
+        if self.usage:
+            policy = replace(policy, limit_seconds=self.usage.cap(user, now))
+        return policy
 
     def status(self, user: str) -> dict:
         self.check_user(user)
@@ -192,6 +198,31 @@ class Service:
                 else None
             )
             cfg = self.config.managedUsers[user]
+            usage_status = self.usage.status(user) if self.usage else {}
+            shared = usage_status.get("shared")
+            if shared and observation and not stale and observation.play_left > 0:
+                fresh = (
+                    shared["day"] == now.date().isoformat()
+                    and 0 <= (now - datetime.fromisoformat(shared["at"])).total_seconds() <= 10
+                )
+                if fresh:
+                    additional = max(
+                        0,
+                        usage_status["localUsage"]["playSeconds"] - shared["localReportedSeconds"],
+                    )
+                    remaining = (
+                        86400
+                        if shared["limitSeconds"] is None
+                        else max(
+                            0, shared["limitSeconds"] - shared["reportedUsedSeconds"] - additional
+                        )
+                    )
+                    decision = decide(
+                        policy,
+                        replace(observation, play_left=remaining),
+                        now,
+                        self.config.warningLeadSeconds,
+                    )
             dns = (
                 cfg.dnsProfiles.homeworkProfile
                 if decision and decision.homework
@@ -201,6 +232,7 @@ class Service:
             )
             pending = state.request if state.request and state.request.active(now) else None
             return {
+                **usage_status,
                 "user": user,
                 "revision": state.revision,
                 "phase": decision.phase if decision else "unknown",
@@ -266,6 +298,9 @@ class Service:
                 >= self.config.reconciliationSeconds
             )
             try:
+                if self.usage:
+                    self.usage.observe(user, self.enforcer.observe(user), policy)
+                    policy = self.policy(user, state, now)
                 if (
                     force
                     or due
@@ -279,6 +314,8 @@ class Service:
                     self.last_apply[user] = now
                 self.observations[user] = self.enforcer.observe(user)
                 self.account_locked(user, state, policy, now)
+                if self.usage:
+                    self.usage.observe(user, self.observations[user], policy)
                 self.errors.pop(user, None)
                 return True
             except (Unavailable, OSError, ValueError) as exc:
@@ -350,6 +387,8 @@ class Service:
             Current status, including pending/applied state and duplicate receipt.
         """
         self.check_user(user)
+        if self.usage and action not in {"request-time", "cancel-request"}:
+            raise InvalidCommand("Shared allowance changes must use the central backend")
         if action not in ACTIONS:
             raise KeyError("Unknown action")
         if not operation or len(operation) > 128 or not actor or len(actor) > 128:
@@ -395,125 +434,150 @@ class Service:
     def transition(
         self, user: str, state: State, action: str, command: Command, actor: str, now: datetime
     ) -> State:
-        state = replace(state, extra_windows=list(state.extra_windows))
-        base = self.config.managedUsers[user].playTime.dailyLimitMinutes * 60
-        amount = (command.minutes or 0) * 60
-        if (
-            action
-            in {"extend-access", "reduce-access", "allow-until", "grant-session", "allow-today"}
-            and state.blocked_until
-        ):
-            raise Conflict("Access is manually blocked; unblock first")
-        if action == "add-time":
-            if state.unlimited:
-                raise Conflict("Today's budget is already unlimited")
+        return transition(
+            self.config.managedUsers[user],
+            state,
+            action,
+            command,
+            actor,
+            now,
+            self.observations.get(user),
+            self.config.requestCooldownSeconds,
+        )
+
+
+def transition(
+    cfg: User,
+    state: State,
+    action: str,
+    command: Command,
+    actor: str,
+    now: datetime,
+    observation: Observation | None,
+    request_cooldown: int = 60,
+) -> State:
+    """Apply a validated child command without depending on a transport or store."""
+    state = replace(state, extra_windows=list(state.extra_windows))
+    base = cfg.playTime.dailyLimitMinutes * 60
+    amount = (command.minutes or 0) * 60
+    if (
+        action in {"extend-access", "reduce-access", "allow-until", "grant-session", "allow-today"}
+        and state.blocked_until
+    ):
+        raise Conflict("Access is manually blocked; unblock first")
+    if action == "add-time":
+        if state.unlimited:
+            raise Conflict("Today's budget is already unlimited")
+        state.delta_seconds += amount
+    elif action in {"deduct-time", "set-remaining"}:
+        if observation is None or (now.timestamp() - observation.observed_at.timestamp()) > 10:
+            raise Unavailable("Fresh usage is required; retry after the device reconnects")
+        if state.unlimited:
+            raise Conflict("Restore or set today's limit before adjusting remaining time")
+        difference = (
+            amount - observation.play_left
+            if action == "set-remaining"
+            else -min(amount, observation.play_left)
+        )
+        state.delta_seconds += difference
+    elif action == "set-limit":
+        state.delta_seconds, state.unlimited = amount - base, False
+    elif action in {"unlimited-today", "allow-today"}:
+        state.unlimited = True
+        if action == "allow-today":
+            state.extra_windows = [Window(0, 86400)]
+            state.until, state.all_day = None, True
+    elif action == "restore-today":
+        state.all_day = False
+        state.delta_seconds, state.unlimited, state.until, state.extra_windows = (
+            0,
+            False,
+            None,
+            [],
+        )
+    elif action in {"extend-access", "reduce-access", "allow-until"}:
+        windows = effective_policy(
+            cfg.timeWindows.for_day(now.isoweekday()),
+            cfg.timeWindows.for_day(now.isoweekday(), homework=True),
+            base,
+            state,
+            now,
+        ).windows
+        current_end = (
+            state.until
+            if state.until is not None
+            else windows[-1].end
+            if windows
+            else seconds_of_day(now)
+        )
+        if command.until is not None:
+            endpoint = minute(command.until) * 60
+        elif action == "allow-until":
+            raise InvalidCommand("An until=HH:MM cutoff is required")
+        else:
+            endpoint = current_end + (amount if action == "extend-access" else -amount)
+        endpoint = min(86400, max(0, endpoint))
+        if action != "reduce-access" and endpoint <= seconds_of_day(now):
+            raise InvalidCommand("Cutoff has passed; choose a later time or grant a session now")
+        state.until = endpoint
+    elif action == "grant-session":
+        start = seconds_of_day(now) // 60 * 60
+        end = min(86400, ((seconds_of_day(now) + amount + 59) // 60) * 60)
+        state.extra_windows = normalize([*state.extra_windows, Window(start, end)])
+        if state.until is not None:
+            state.until = max(state.until, end)
+        if not state.unlimited:
             state.delta_seconds += amount
-        elif action in {"deduct-time", "set-remaining"}:
-            observation = self.observations.get(user)
-            if observation is None or (now.timestamp() - observation.observed_at.timestamp()) > 10:
-                raise Unavailable("Fresh usage is required; retry after the device reconnects")
-            if state.unlimited:
-                raise Conflict("Restore or set today's limit before adjusting remaining time")
-            difference = (
-                amount - observation.play_left
-                if action == "set-remaining"
-                else -min(amount, observation.play_left)
+    elif action == "block":
+        if not command.today and command.days is None:
+            raise InvalidCommand("Provide today=true or days from 1 to 31")
+        state.blocked_until = block_date(now, 1 if command.today else command.days or 1)
+    elif action == "unblock":
+        state.blocked_until = None
+    elif action in {"mute", "unmute"}:
+        state.muted = action == "mute"
+    elif action == "request-time":
+        if state.muted or state.blocked_until:
+            raise Conflict("Requests are muted or access is manually blocked")
+        if state.request and state.request.active(now):
+            raise Conflict("A request is already pending")
+        if (
+            state.last_request_at
+            and now.timestamp() - datetime.fromisoformat(state.last_request_at).timestamp()
+            < request_cooldown
+        ):
+            raise Conflict("Please wait before requesting again")
+        state.request = Request(
+            str(uuid4()),
+            now.isoformat(),
+            midnight_after(now).isoformat(),
+            minutes=command.minutes,
+            reason=command.reason,
+        )
+        state.last_request_at = now.isoformat()
+    elif action in {"cancel-request", "decide-request"}:
+        request = state.request
+        if request is None or not request.active(now) or request.id != command.requestId:
+            raise Conflict("Request is no longer pending; refresh")
+        if action == "cancel-request":
+            state.request = replace(request, status="cancelled", decided_by=actor)
+        elif command.decision == "deny":
+            state.request = replace(
+                request, status="denied", decided_by=actor, decision=command.reason
             )
-            state.delta_seconds += difference
-        elif action == "set-limit":
-            state.delta_seconds, state.unlimited = amount - base, False
-        elif action in {"unlimited-today", "allow-today"}:
-            state.unlimited = True
-            if action == "allow-today":
-                state.extra_windows = [Window(0, 86400)]
-                state.until, state.all_day = None, True
-        elif action == "restore-today":
-            state.all_day = False
-            state.delta_seconds, state.unlimited, state.until, state.extra_windows = (
-                0,
-                False,
-                None,
-                [],
-            )
-        elif action in {"extend-access", "reduce-access", "allow-until"}:
-            windows = self.policy(user, state, now).windows
-            current_end = (
-                state.until
-                if state.until is not None
-                else windows[-1].end
-                if windows
-                else seconds_of_day(now)
-            )
-            if command.until is not None:
-                endpoint = minute(command.until) * 60
-            elif action == "allow-until":
-                raise InvalidCommand("An until=HH:MM cutoff is required")
-            else:
-                endpoint = current_end + (amount if action == "extend-access" else -amount)
-            endpoint = min(86400, max(0, endpoint))
-            if action != "reduce-access" and endpoint <= seconds_of_day(now):
+        else:
+            decision = command.decision
+            if decision not in {"add-time", "grant-session", "unlimited-today", "allow-today"}:
                 raise InvalidCommand(
-                    "Cutoff has passed; choose a later time or grant a session now"
+                    "Choose add-time, grant-session, unlimited-today, allow-today, or deny"
                 )
-            state.until = endpoint
-        elif action == "grant-session":
-            start = seconds_of_day(now) // 60 * 60
-            end = min(86400, ((seconds_of_day(now) + amount + 59) // 60) * 60)
-            state.extra_windows = normalize([*state.extra_windows, Window(start, end)])
-            if state.until is not None:
-                state.until = max(state.until, end)
-            if not state.unlimited:
-                state.delta_seconds += amount
-        elif action == "block":
-            if not command.today and command.days is None:
-                raise InvalidCommand("Provide today=true or days from 1 to 31")
-            state.blocked_until = block_date(now, 1 if command.today else command.days or 1)
-        elif action == "unblock":
-            state.blocked_until = None
-        elif action in {"mute", "unmute"}:
-            state.muted = action == "mute"
-        elif action == "request-time":
-            if state.muted or state.blocked_until:
-                raise Conflict("Requests are muted or access is manually blocked")
-            if state.request and state.request.active(now):
-                raise Conflict("A request is already pending")
-            if (
-                state.last_request_at
-                and now.timestamp() - datetime.fromisoformat(state.last_request_at).timestamp()
-                < self.config.requestCooldownSeconds
-            ):
-                raise Conflict("Please wait before requesting again")
-            state.request = Request(
-                str(uuid4()),
-                now.isoformat(),
-                midnight_after(now).isoformat(),
-                minutes=command.minutes,
-                reason=command.reason,
+            if decision in {"add-time", "grant-session"} and not command.minutes:
+                raise InvalidCommand("Approval needs a positive minute amount")
+            state = transition(
+                cfg, state, decision, command, actor, now, observation, request_cooldown
             )
-            state.last_request_at = now.isoformat()
-        elif action in {"cancel-request", "decide-request"}:
-            request = state.request
-            if request is None or not request.active(now) or request.id != command.requestId:
-                raise Conflict("Request is no longer pending; refresh")
-            if action == "cancel-request":
-                state.request = replace(request, status="cancelled", decided_by=actor)
-            elif command.decision == "deny":
-                state.request = replace(
-                    request, status="denied", decided_by=actor, decision=command.reason
-                )
-            else:
-                decision = command.decision
-                if decision not in {"add-time", "grant-session", "unlimited-today", "allow-today"}:
-                    raise InvalidCommand(
-                        "Choose add-time, grant-session, unlimited-today, allow-today, or deny"
-                    )
-                if decision in {"add-time", "grant-session"} and not command.minutes:
-                    raise InvalidCommand("Approval needs a positive minute amount")
-                state = self.transition(user, state, decision, command, actor, now)
-                state.request = replace(
-                    request, status="approved", decided_by=actor, decision=decision
-                )
-        if base + state.delta_seconds > 86400:
-            raise InvalidCommand("Today's budget cannot exceed 24 hours; choose unlimited today")
-        state.delta_seconds = max(-base, state.delta_seconds)
-        return state
+            state.request = replace(request, status="approved", decided_by=actor, decision=decision)
+    if base + state.delta_seconds > 86400:
+        raise InvalidCommand("Today's budget cannot exceed 24 hours; choose unlimited today")
+    state.delta_seconds = max(-base, state.delta_seconds)
+    return state

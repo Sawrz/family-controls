@@ -55,7 +55,7 @@ The four password/OIDC login/registration switches remain independent.
 
 ## Parent workflows
 
-- **Today:** search and filter computer accounts, inspect reported usage and
+- **Today:** search and filter children and their assigned computers, inspect reported usage and
   delivery state, and make custom daily changes. The editor distinguishes total
   allowance, remaining time, access cutoff, sessions, unlimited play budget,
   all-day access, restoration, manual blocks and request muting.
@@ -75,7 +75,9 @@ The four password/OIDC login/registration switches remain independent.
 
 Device/account assignments are configured in Nix. Shared computers need separate
 OS accounts for different children. A shared OS login cannot distinguish children;
-the current backend also has no pooled allowance across a child's computers.
+the backend shares each child’s allowance across assigned computers. Simultaneous
+metered usage is summed; the Today view exposes per-computer allocations and
+delivery, and Weekly usage shows daily totals and device details.
 The interface labels every target with its child identifier, computer and account.
 
 ## Delivery and authentication

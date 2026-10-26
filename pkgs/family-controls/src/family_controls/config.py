@@ -73,7 +73,8 @@ class User(Model):
 
 
 class BackendConnection(Model):
-    url: str
+    url: str = "http://localhost"
+    socketPath: str | None = None
     tokenFile: str | None = None
     caFile: str | None = None
 
@@ -81,6 +82,17 @@ class BackendConnection(Model):
     def secure_url(self) -> "BackendConnection":
         from urllib.parse import urlsplit
 
+        if self.socketPath:
+            if (
+                not self.socketPath.startswith("/")
+                or self.tokenFile
+                or self.caFile
+                or self.url != "http://localhost"
+            ):
+                raise ValueError(
+                    "Local adapters use an absolute socket path without credentials or a URL"
+                )
+            return self
         url = urlsplit(self.url)
         if url.scheme != "https" or not url.hostname or url.username or url.password:
             raise ValueError("Backend URL must use HTTPS without embedded credentials")
@@ -98,6 +110,12 @@ class AgentSettings(Model):
     enrollmentTokenFile: str | None = None
     requestTimeoutSeconds: Positive = 5
     maxConnections: Annotated[int, Field(ge=1, le=128)] = 16
+
+    @model_validator(mode="after")
+    def network_backend(self) -> "AgentSettings":
+        if self.backend and self.backend.socketPath:
+            raise ValueError("Devices require an outbound HTTPS backend connection")
+        return self
 
 
 class TimekprSettings(Model):
@@ -140,7 +158,7 @@ class RelayConfig(Model):
     def unique_names(self) -> "RelayConfig":
         if len({name.casefold() for name in self.children}) != len(self.children):
             raise ValueError("Child names must be unique ignoring case")
-        if not self.backend.tokenFile:
+        if not (self.backend.tokenFile or self.backend.socketPath):
             raise ValueError("Interface backend credential is required")
         return self
 
@@ -159,7 +177,9 @@ class MatrixConfig(Model):
 
     @model_validator(mode="after")
     def secure(self) -> "MatrixConfig":
-        if not self.homeserver.startswith("https://") or not self.backend.tokenFile:
+        if not self.homeserver.startswith("https://") or not (
+            self.backend.tokenFile or self.backend.socketPath
+        ):
             raise ValueError("Matrix requires HTTPS and a backend credential")
         return self
 

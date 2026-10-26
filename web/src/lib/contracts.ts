@@ -24,6 +24,22 @@ const pendingRequest = z
   })
   .passthrough();
 export const status = z.object({
+  reportedUsedSeconds: z.number(),
+  availableSeconds: z.number(),
+  reservedSeconds: z.number(),
+  devices: z.array(
+    z.object({
+      device: z.string(),
+      user: z.string(),
+      connectivity: z.string(),
+      lastSeen: z.string().nullable(),
+      policyRevision: z.number(),
+      status: z.object({
+        remainingPlayTimeSeconds: z.number().nullable().optional(),
+        application: z.object({ status: z.string() }).optional(),
+      }),
+    }),
+  ),
   user: z.string(),
   phase: z.string(),
   revision: z.number().optional(),
@@ -46,8 +62,7 @@ export const status = z.object({
 export type Status = z.infer<typeof status>;
 export const policy = z.object({
   revision: z.number(),
-  device: z.string(),
-  user: z.string(),
+  assignments: z.array(z.object({ device: z.string(), user: z.string() })),
   timezone: z.string(),
   policy: z.object({
     timeWindows: z.object({
@@ -69,6 +84,32 @@ export const policy = z.object({
 });
 export type Policy = z.infer<typeof policy>;
 export type Child = { id: string; policy: Policy; status: Status };
+export function assignmentLabel(child: Child): string {
+  return child.policy.assignments.map((a) => `${a.device} · ${a.user}`).join(', ');
+}
+const usageCounters = {
+  playSeconds: z.number(),
+  activeSeconds: z.number().nullable(),
+  unmeteredSeconds: z.number().nullable(),
+  unknownSeconds: z.number(),
+};
+export const weeklyUsage = z.object({
+  child: z.string(),
+  start: z.string(),
+  accounting: z.literal('sum-device-usage'),
+  days: z.array(
+    z.object({
+      day: z.string(),
+      availability: z.enum(['missing', 'partial', 'future']),
+      playSeconds: z.number().nullable(),
+      activeSeconds: z.number().nullable(),
+      unmeteredSeconds: z.number().nullable(),
+      unknownSeconds: z.number().nullable(),
+      devices: z.array(z.object({ device: z.string(), user: z.string(), ...usageCounters })),
+    }),
+  ),
+});
+export type WeeklyUsage = z.infer<typeof weeklyUsage>;
 export const history = z.object({
   events: z.array(
     z.object({

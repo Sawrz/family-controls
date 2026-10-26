@@ -27,6 +27,8 @@ class CountdownApp:
         self.window: tk.Toplevel | None = None
         self.label_var = tk.StringVar()
         self.detail_var = tk.StringVar()
+        self.usage_var = tk.StringVar()
+        self.german = os.environ.get("LANG", "").startswith("de")
         self.minutes_var = tk.StringVar(value="15m")
         self.reason_var = tk.StringVar()
         self.feedback = ""
@@ -60,6 +62,9 @@ class CountdownApp:
             sticky="w", pady=8
         )
         ttk.Label(frame, textvariable=self.detail_var, wraplength=400).grid(sticky="w", pady=8)
+        ttk.Label(frame, textvariable=self.usage_var, wraplength=400, justify="left").grid(
+            sticky="w", pady=8
+        )
         ttk.Label(frame, text="Request duration (for example 25m or 1h 10m)").grid(sticky="w")
         ttk.Entry(frame, textvariable=self.minutes_var).grid(sticky="ew")
         ttk.Label(frame, text="Reason (optional)").grid(sticky="w")
@@ -116,6 +121,33 @@ class CountdownApp:
         self.ensure_window()
         remaining = status.get("remainingCountdownSeconds")
         self.label_var.set(duration(remaining) if remaining is not None else "Unavailable")
+        usage, shared = status.get("localUsage"), status.get("shared")
+        if usage:
+            active = duration(usage["activeSeconds"])
+            play = duration(usage["playSeconds"])
+            local = (
+                duration(status.get("remainingPlayTimeSeconds"))
+                if status.get("remainingPlayTimeSeconds") is not None
+                else "—"
+            )
+            text = (
+                f"Heute auf diesem Computer\nAktive Zeit: {active} · Spielzeit: {play}\nHier verfügbare Spielzeit: {local}"
+                if self.german
+                else f"Today on this computer\nActive time: {active} · Play time: {play}\nPlay time available here: {local}"
+            )
+            if shared:
+                used = duration(shared["reportedUsedSeconds"])
+                balance = duration(
+                    None
+                    if shared["limitSeconds"] is None
+                    else max(0, shared["limitSeconds"] - shared["reportedUsedSeconds"])
+                )
+                text += (
+                    f"\nZuletzt gemeldet, alle Computer\nVerbraucht: {used} · Rest: {balance}\nOffline ist nur die lokal zugeteilte Zeit verfügbar."
+                    if self.german
+                    else f"\nLast reported, all computers\nUsed: {used} · Remaining: {balance}\nOffline, only locally allocated time is available."
+                )
+            self.usage_var.set(text)
         detail = status.get("phase", "unknown").replace("_", " ")
         if request:
             detail += f". Request {request['status']}"
@@ -191,7 +223,7 @@ class CountdownApp:
         self.request_button = self.cancel_button = None
         # Tk variables must be finalized on the UI thread, before cyclic garbage
         # collection can run in a later network/notification worker.
-        del self.label_var, self.detail_var, self.minutes_var, self.reason_var
+        del self.label_var, self.detail_var, self.usage_var, self.minutes_var, self.reason_var
         self.root.destroy()
         del self.root
 

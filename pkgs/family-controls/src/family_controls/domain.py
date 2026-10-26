@@ -139,6 +139,14 @@ class State:
         return current
 
 
+def state_from_dict(data: dict) -> State:
+    """Decode a persisted policy overlay without sharing mutable containers."""
+    values = dict(data)
+    values["extra_windows"] = [Window(**item) for item in data.get("extra_windows", [])]
+    values["request"] = Request(**data["request"]) if data.get("request") else None
+    return State(**values)
+
+
 @dataclass(frozen=True)
 class Policy:
     windows: tuple[Window, ...]

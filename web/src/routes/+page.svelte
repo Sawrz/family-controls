@@ -5,9 +5,11 @@
   import CommandEditor from '#lib/components/CommandEditor.svelte';
   import PolicyEditor from '#lib/components/PolicyEditor.svelte';
   import Admin from '#lib/components/Admin.svelte';
+  import UsageReport from '#lib/components/UsageReport.svelte';
   import { Api, ApiError, errorKey, recalled, remember, type Intent } from '#lib/api.ts';
   import {
     receipt,
+    assignmentLabel,
     type Account,
     type WebConfig,
     type Child,
@@ -17,8 +19,8 @@
   } from '#lib/contracts.ts';
   import { translate, actionLabel, dateTime, type Language, type Message } from '#lib/i18n.ts';
 
-  type View = 'today' | 'requests' | 'schedules' | 'history' | 'settings';
-  const views: View[] = ['today', 'requests', 'schedules', 'history', 'settings'];
+  type View = 'today' | 'requests' | 'schedules' | 'history' | 'usage' | 'settings';
+  const views: View[] = ['today', 'requests', 'schedules', 'usage', 'history', 'settings'];
   const api = new Api();
   let language = $state<Language>('en'),
     config = $state<WebConfig | null>(null),
@@ -26,6 +28,7 @@
   let children = $state<Child[]>([]),
     events = $state<HistoryEvent[]>([]),
     view = $state<View>('today');
+  let usageRefresh = $state(0);
   let loading = $state(true),
     error = $state<Message | null>(null),
     transportDown = $state(false),
@@ -51,14 +54,14 @@
         new Date(c.status.pendingRequest.expires_at).getTime() > Date.now(),
     ),
   );
-  const deviceNames = $derived([...new Set(children.map((c) => c.policy.device))]);
+  const deviceNames = $derived([
+    ...new Set(children.flatMap((c) => c.policy.assignments.map((a) => a.device))),
+  ]);
   const visible = $derived(
     children.filter(
       (c) =>
-        (!computer || c.policy.device === computer) &&
-        `${c.id} ${c.policy.device} ${c.policy.user}`
-          .toLocaleLowerCase()
-          .includes(search.toLocaleLowerCase()),
+        (!computer || c.policy.assignments.some((a) => a.device === computer)) &&
+        `${c.id} ${assignmentLabel(c)}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
     ),
   );
   function stopLive() {
@@ -86,6 +89,7 @@
       const latestEvents = view === 'history' ? await api.history(result) : null;
       if (generation !== current || stopped) return;
       children = result;
+      usageRefresh++;
       transportDown = false;
       if (latestEvents) events = latestEvents;
     } catch (e) {
@@ -368,7 +372,7 @@
         {#if view === 'today' && pending.length}<section class="request-banner">
             <div>
               <h2>{pending[0].id} {t('asking')}</h2>
-              <p>{pending[0].status.pendingRequest?.reason} · {pending[0].policy.device}</p>
+              <p>{pending[0].status.pendingRequest?.reason} · {assignmentLabel(pending[0])}</p>
             </div>
             <button class="primary" onclick={() => select(pending[0], true)}
               >{t('review')}{pending.length > 1 ? ` (${pending.length})` : ''}</button
@@ -397,7 +401,7 @@
                   >
                   <div>
                     <h3>{child.id}</h3>
-                    <p class="help">{child.policy.device} · {t('account')}: {child.policy.user}</p>
+                    <p class="help">{assignmentLabel(child)}</p>
                   </div>
                   <span class="status-label">{t(statusLabel(child))}</span>
                 </div>
@@ -422,11 +426,7 @@
                     <button onclick={() => select(child)}>{t('change')}</button>
                   </div>
                   {#if !transportDown && child.status.connectivity === 'online' && child.status.effectiveDailyLimitMinutes != null && child.status.remainingPlayTimeSeconds != null && !child.status.unlimitedToday}
-                    {@const used = Math.max(
-                      0,
-                      child.status.effectiveDailyLimitMinutes -
-                        child.status.remainingPlayTimeSeconds / 60,
-                    )}
+                    {@const used = Math.max(0, child.status.reportedUsedSeconds / 60)}
                     <progress
                       max={Math.max(1, child.status.effectiveDailyLimitMinutes)}
                       value={used}
@@ -452,6 +452,28 @@
                         child.policy.timezone,
                       )}
                     </p>{/if}
+                  <p class="help">{t('sharedScope')}</p>
+                  <details>
+                    <summary>{t('deviceDetails')}</summary>
+                    <p class="help">
+                      {t('availableNow')}: {Math.floor(child.status.availableSeconds / 60)}
+                      {t('min')} · {t('reserved')}: {Math.ceil(child.status.reservedSeconds / 60)}
+                      {t('min')}
+                    </p>
+                    <p class="help">{t('allocationHint')}</p>
+                    <ul>
+                      {#each child.status.devices as device}<li>
+                          {device.device} · {device.user} — {t(
+                            device.connectivity === 'online' ? 'online' : 'offline',
+                          )}
+                          {#if device.connectivity === 'online' && device.status.remainingPlayTimeSeconds != null}
+                            · {Math.floor(device.status.remainingPlayTimeSeconds / 60)}
+                            {t('min')}
+                            {t('onThisComputer')}
+                          {/if}
+                        </li>{/each}
+                    </ul>
+                  </details>
                   {#if child.status.delivery.pending || child.status.policyDelivery === 'pending'}<p
                       class="state-note"
                     >
@@ -478,19 +500,19 @@
                   {language}
                   request={requestMode}
                   {busy}
-                  locked={uncertain !== null ||
-                    transportDown ||
-                    selected.status.delivery.pending > 0}
+                  locked={uncertain !== null || transportDown}
                   onsend={send}
                   onclose={() => (selectedId = '')}
                 />
               </div>{/key}{/if}
         </div>
+      {:else if view === 'usage'}
+        <UsageReport {children} {language} refreshVersion={usageRefresh} />
       {:else if view === 'schedules'}
         <label class="short-field"
           >{t('account')}<select aria-label={t('account')} bind:value={selectedId}
             ><option value="">—</option>{#each children as child}<option value={child.id}
-                >{child.id} · {child.policy.device}</option
+                >{child.id} · {assignmentLabel(child)}</option
               >{/each}</select
           ></label
         >
@@ -503,7 +525,7 @@
         <label class="short-field"
           >{t('account')}<select aria-label={t('account')} bind:value={selectedId}
             ><option value="">{t('children')}</option>{#each children as child}<option
-                value={child.id}>{child.id} · {child.policy.device}</option
+                value={child.id}>{child.id} · {assignmentLabel(child)}</option
               >{/each}</select
           ></label
         >

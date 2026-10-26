@@ -224,3 +224,6 @@ result-*
 # Ignore automatically generated direnv output
 .direnv
 
+
+# Browser journey artifacts
+/test-results/

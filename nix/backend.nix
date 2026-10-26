@@ -12,6 +12,26 @@
       raw = json.generate "family-controls-backend.json" (
         cfg.settings
         // {
+          adapterSocketPath = "/run/family-controls-backend/adapters.sock";
+          localAdapters = lib.listToAttrs (
+            lib.concatMap
+              (
+                name:
+                lib.optional
+                  (
+                    config.services.family-controls.interfaces.${name}.enable
+                    && config.services.family-controls.interfaces.${name}.transport == "local"
+                  )
+                  {
+                    name = "family-controls-${name}";
+                    value = name;
+                  }
+              )
+              [
+                "telegram"
+                "matrix"
+              ]
+          );
           authentication = (cfg.settings.authentication or { }) // {
             password = {
               registration = cfg.authentication.password.registration.enable;
@@ -57,9 +77,11 @@
       };
       config = lib.mkIf cfg.enable {
         users.groups.family-controls-backend = { };
+        users.groups.family-controls-adapters = { };
         users.users.family-controls-backend = {
           isSystemUser = true;
           group = "family-controls-backend";
+          extraGroups = [ "family-controls-adapters" ];
         };
         systemd.tmpfiles.rules = [ "d ${stateDir} 0700 family-controls-backend family-controls-backend -" ];
         systemd.services.family-controls-backend = {
@@ -79,6 +101,8 @@
             ProtectHome = true;
             PrivateTmp = true;
             UMask = "0077";
+            RuntimeDirectory = "family-controls-backend";
+            RuntimeDirectoryMode = "0755";
             ReadWritePaths = [ stateDir ];
           };
         };

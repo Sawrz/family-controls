@@ -3,13 +3,23 @@
 {
   imports = [ (import ./nixos.nix { inherit self; }) ];
   name = lib.mkForce "family-controls-web-journeys";
-  globalTimeout = lib.mkForce 900;
+  globalTimeout = lib.mkForce 1200;
   extraPythonPackages = ps: [
     ps.pytest
     ps.playwright
   ];
 
   nodes.backend = { pkgs, ... }: {
+    services.family-controls.backend.settings.children.child.assignments = lib.mkForce [
+      {
+        device = "machine";
+        user = "child";
+      }
+      {
+        device = "laptop";
+        user = "child";
+      }
+    ];
     services.family-controls.backend.settings.publicUrl = lib.mkForce "https://backend";
     services.family-controls.interfaces.web = {
       enable = true;
@@ -57,6 +67,27 @@
     };
     virtualisation.memorySize = lib.mkForce 2048;
     virtualisation.cores = 2;
+  };
+
+  nodes.laptop = { ... }: {
+    imports = [ (import ./nixos.nix { inherit self; }).nodes.machine ];
+    services.family-controls.agent.deviceId = lib.mkForce "laptop";
+    services.family-controls.agent.managedUsers = lib.mkForce {
+      child = {
+        blockTTYLogin = false;
+        killSessions = false;
+        playTime = {
+          dailyLimitMinutes = 60;
+          activities = [ ".*family-test-game.*" ];
+        };
+        timeWindows.allowed.ALL = [ "00:00-24:00" ];
+        dnsProfiles = {
+          restrictedProfile = "restricted";
+          homeworkProfile = "homework";
+          leisureProfile = "leisure";
+        };
+      };
+    };
   };
 
   nodes.machine = { pkgs, ... }: {
@@ -108,11 +139,13 @@
     machine.wait_for_unit("timekprd")
     machine.wait_for_unit("family-test-session-child")
     machine.wait_for_unit("family-test-session-sibling")
+    laptop.wait_for_unit("timekprd")
+    laptop.wait_for_unit("family-test-session-child")
 
     class VMFixtures:
         @pytest.fixture(scope="session")
         def vm_nodes(self):
-            return SimpleNamespace(machine=machine, backend=backend)
+            return SimpleNamespace(machine=machine, laptop=laptop, backend=backend)
 
     output = Path(driver.out_dir)
     os.environ["VM_ARTIFACTS"] = str(output)
@@ -126,7 +159,7 @@
     finally:
         machine.succeed("DISPLAY=:99 scrot /tmp/child-final.png")
         machine.copy_from_machine("/tmp/child-final.png", str(output))
-        for node in (machine, backend):
+        for node in (machine, laptop, backend):
             (output / (node.name + "-journal.txt")).write_text(node.succeed("journalctl -b --no-pager"))
   '';
 }

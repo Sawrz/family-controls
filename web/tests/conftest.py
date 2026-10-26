@@ -56,11 +56,13 @@ class Enforcement:
         self.policies[user] = policy
 
     def observe(self, user):
-        limit = self.policies[user].limit_seconds
+        policy = self.policies.get(user)
+        limit = policy.limit_seconds if policy else 0
         return Observation(
             max(0, (86400 if limit is None else limit) - self.used.get(user, 0)),
             86400,
             self.clock.now(),
+            {"playSeconds": self.used.get(user, 0), "activeActivities": 0},
         )
 
 
@@ -83,8 +85,9 @@ def household(tmp_path, request):
             },
             "children": {
                 name: {
-                    "device": "jonas-pc" if name == "jonas" else "shared-pc",
-                    "user": name,
+                    "assignments": [
+                        {"device": "jonas-pc" if name == "jonas" else "shared-pc", "user": name}
+                    ],
                     "policy": policy,
                 }
                 for name in ("mia", "jonas", "lina")

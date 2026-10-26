@@ -22,6 +22,9 @@ class BackendClient:
         )
         return {"Authorization": "Bearer " + credential} if credential else {}
 
+    def transport(self) -> httpx.HTTPTransport:
+        return httpx.HTTPTransport(uds=self.config.socketPath, verify=self.context, trust_env=False)
+
     @staticmethod
     def check(response: httpx.Response) -> None:
         if response.status_code >= 500 or response.status_code == 429:
@@ -42,7 +45,7 @@ class BackendClient:
         headers: dict | None = None,
     ) -> dict:
         try:
-            with httpx.Client(verify=self.context, timeout=10, trust_env=False) as client:
+            with httpx.Client(transport=self.transport(), timeout=10, trust_env=False) as client:
                 response = client.request(
                     method or ("POST" if payload is not None else "GET"),
                     self.config.url.rstrip("/") + route,
@@ -63,7 +66,7 @@ class BackendClient:
         """Yield events and heartbeat ticks; caller persists progress after processing."""
         try:
             with (
-                httpx.Client(verify=self.context, timeout=30, trust_env=False) as client,
+                httpx.Client(transport=self.transport(), timeout=30, trust_env=False) as client,
                 client.stream(
                     "GET",
                     self.config.url.rstrip("/") + route,

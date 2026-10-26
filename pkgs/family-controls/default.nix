@@ -13,10 +13,10 @@ let
     src = source;
     installPhase = ''
       mkdir -p "$out/share/family_controls/backend" "$out/share/family_controls/adapters"
-      for file in __init__ domain application config ports clock notifications presentation; do
+      for file in __init__ domain application config ports clock notifications presentation usage local_usage; do
         cp "$src/$file.py" "$out/share/family_controls/"
       done
-      for file in __init__ models ports service accounts; do
+      for file in __init__ models ports service accounts usage; do
         cp "$src/backend/$file.py" "$out/share/family_controls/backend/"
       done
       cp "$src/adapters/__init__.py" "$out/share/family_controls/adapters/"
@@ -66,6 +66,7 @@ in
         "backend/main"
         "adapters/api"
         "adapters/backend_sqlite"
+        "adapters/local_backend"
         "adapters/oidc"
         "adapters/passwords"
         "adapters/timekpr"

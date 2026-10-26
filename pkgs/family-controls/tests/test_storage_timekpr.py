@@ -62,6 +62,7 @@ class Bus:
             "TIME_LEFT_DAY": 4000,
             "PLAYTIME_LEFT_DAY": 100,
             "ACTUAL_PLAYTIME_LEFT_DAY": 59,
+            "PLAYTIME_SPENT_DAY": 1,
             "ACTUAL_TIME_LEFT_CONTINUOUS": 60,
         }
         self.users = {}
@@ -183,3 +184,19 @@ def test_expired_relay_prompts_and_actor_claims_are_pruned_but_receipts_remain(s
     assert repo.relay_get("transport")["offset"] == 123
     assert repo.operation("retained")[1] == "applied"
     assert repo.history("child")[0]["outcome"] == "applied"
+
+
+def test_limit_readback_with_stale_remaining_never_fabricates_usage(setup):
+    bus = Bus()
+    bus.values.update(
+        {
+            "PLAYTIME_LIMITS_PER_WEEKDAYS": [86400] * 7,
+            "PLAYTIME_SPENT_DAY": 17,
+            "ACTUAL_PLAYTIME_LEFT_DAY": 23,
+            "ACTUAL_ACTIVE_PLAYTIME_ACTIVITY_COUNT": 1,
+        }
+    )
+    adapter = Timekpr(setup.config, setup.clock, lambda: bus)
+    assert adapter.observe("child").raw["playSeconds"] == 17
+    bus.values["ACTUAL_PLAYTIME_LEFT_DAY"] = 86383
+    assert adapter.observe("child").raw["playSeconds"] == 17

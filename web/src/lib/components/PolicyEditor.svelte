@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { assignmentLabel } from '#lib/contracts.ts';
   import { untrack } from 'svelte';
   import { Api, ApiError, errorKey } from '../api';
   import { policy, type Child } from '../contracts';
@@ -76,7 +77,7 @@
 </script>
 
 <section class="policy-editor">
-  <h2>{child.id} · {child.policy.device}</h2>
+  <h2>{child.id} · {assignmentLabel(child)}</h2>
   <p class="help">{t('routineHint')} · {child.policy.timezone}</p>
   {#if error}<p role="alert" class="alert error">{t(conflict ? 'draftConflict' : error)}</p>{/if}
   {#if notice}<p role="status" class="alert">{t('saved')}</p>{/if}

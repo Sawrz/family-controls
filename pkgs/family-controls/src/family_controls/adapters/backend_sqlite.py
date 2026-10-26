@@ -23,12 +23,14 @@ class BackendStore:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, audience TEXT NOT NULL,
                 kind TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS events_audience ON events(audience,id);
-            CREATE INDEX IF NOT EXISTS commands_pending
-                ON documents(json_extract(value,'$.device'))
+            CREATE INDEX IF NOT EXISTS commands_pending_child
+                ON documents(json_extract(value,'$.child'))
                 WHERE collection='commands'
                     AND json_extract(value,'$.status') IN ('queued','accepted');
             CREATE INDEX IF NOT EXISTS commands_child
                 ON documents(json_extract(value,'$.child')) WHERE collection='commands';
+            CREATE INDEX IF NOT EXISTS usage_child_day ON documents(
+                collection,json_extract(value,'$.child'),json_extract(value,'$.day'));
         """)
         Path(path).chmod(0o600)
 
@@ -81,13 +83,24 @@ class BackendStore:
             )
             return int(cursor.lastrowid or 0)
 
-    def pending_commands(self, device: str) -> list[dict]:
+    def usage_range(self, collection: str, child: str, start: str, end: str) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT value FROM documents WHERE collection=? "
+                "AND json_extract(value,'$.child')=? "
+                "AND json_extract(value,'$.day') BETWEEN ? AND ? "
+                "ORDER BY json_extract(value,'$.day'),key",
+                (collection, child, start, end),
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def pending_commands(self, child: str) -> list[dict]:
         with self.lock:
             rows = self.db.execute(
                 "SELECT value FROM documents WHERE collection='commands' "
-                "AND json_extract(value,'$.device')=? "
+                "AND json_extract(value,'$.child')=? "
                 "AND json_extract(value,'$.status') IN ('queued','accepted') ORDER BY rowid",
-                (device,),
+                (child,),
             ).fetchall()
             return [json.loads(row[0]) for row in rows]
 
