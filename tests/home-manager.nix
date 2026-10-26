@@ -23,6 +23,10 @@ let
               type = lib.types.attrsOf lib.types.anything;
               default = { };
             };
+            xdg.desktopEntries = lib.mkOption {
+              type = lib.types.attrsOf lib.types.anything;
+              default = { };
+            };
             xdg.configFile = lib.mkOption {
               type = lib.types.attrsOf lib.types.anything;
               default = { };
@@ -34,8 +38,8 @@ let
           };
         }
         {
-          custom.configs.familyControlsCountdown.enable = enabled;
-          custom.configs.timekprClient = {
+          services.family-controls.desktop.enable = enabled;
+          services.family-controls.timekprClient = {
             enable = enabled;
             autostart = false;
             notifications.enable = false;
@@ -47,9 +51,9 @@ let
   disabled = evaluate false;
 in
 assert lib.assertMsg (
-  enabled.systemd.user.services.family-controls-sessiond.Service.ExecStart == "${
-    self.packages.${pkgs.stdenv.hostPlatform.system}.family-controls-sessiond
-  }/bin/family-controls-sessiond"
+  enabled.systemd.user.services.family-controls-desktop.Service.ExecStart == "${
+    self.packages.${pkgs.stdenv.hostPlatform.system}.family-controls-desktop
+  }/bin/family-controls-desktop"
 ) "Countdown package injection must resolve through the exported module";
 assert lib.assertMsg (
   disabled.home.packages == [ ]

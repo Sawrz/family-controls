@@ -1,7 +1,5 @@
 """Validated process configuration. Deployment values are supplied by Nix."""
 
-import re
-from ipaddress import IPv6Address
 from pathlib import Path
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -74,20 +72,35 @@ class User(Model):
         return self
 
 
+class BackendConnection(Model):
+    url: str
+    tokenFile: str | None = None
+    caFile: str | None = None
+
+    @model_validator(mode="after")
+    def secure_url(self) -> "BackendConnection":
+        from urllib.parse import urlsplit
+
+        url = urlsplit(self.url)
+        if url.scheme != "https" or not url.hostname or url.username or url.password:
+            raise ValueError("Backend URL must use HTTPS without embedded credentials")
+        if url.path not in {"", "/"} or url.query or url.fragment:
+            raise ValueError("Backend URL must be an origin")
+        return self
+
+
 class AgentSettings(Model):
-    stateDir: str = "/var/lib/family-controls"
+    stateDir: str = "/var/lib/family-controls-agent"
     socketPath: str = "/run/family-controls/control.sock"
     socketGroup: str | None = "family-controls"
-    bindHost: str = "127.0.0.1"
-    port: Annotated[int, Field(ge=1, le=65535)] = 18451
-    tlsCertPath: str = "/var/lib/family-controls/tls/server.crt"
-    tlsKeyPath: str = "/var/lib/family-controls/tls/server.key"
+    deviceId: Identifier = "device"
+    backend: BackendConnection | None = None
+    enrollmentTokenFile: str | None = None
     requestTimeoutSeconds: Positive = 5
     maxConnections: Annotated[int, Field(ge=1, le=128)] = 16
 
 
 class TimekprSettings(Model):
-    adminBinary: str | None = None  # Accepted for existing generated configurations.
     timeoutSeconds: Positive = 5
 
 
@@ -116,33 +129,38 @@ class AgentConfig(Model):
         return self
 
 
-class Child(Model):
-    host: str
-    port: Annotated[int, Field(ge=1, le=65535)] = 18451
-    user: Identifier
-    deviceId: str
-    apiTokenFile: str
-    caFile: str | None = None
-
-    @model_validator(mode="after")
-    def hostname(self) -> "Child":
-        if ":" in self.host:
-            IPv6Address(self.host)
-        if not re.fullmatch(r"[A-Za-z0-9.:-]+", self.host):
-            raise ValueError("Child host must be a DNS name or IP address")
-        return self
-
-
 class RelayConfig(Model):
     parentGroupChatId: str
-    hostChildren: dict[Identifier, Child] = Field(min_length=1)
-    stateDir: str = "/var/lib/family-controls-relay"
+    backend: BackendConnection
+    children: list[Identifier] = Field(min_length=1)
+    stateDir: str = "/var/lib/family-controls-telegram"
     pollIntervalSeconds: Positive = 5
 
     @model_validator(mode="after")
     def unique_names(self) -> "RelayConfig":
-        if len({name.casefold() for name in self.hostChildren}) != len(self.hostChildren):
+        if len({name.casefold() for name in self.children}) != len(self.children):
             raise ValueError("Child names must be unique ignoring case")
+        if not self.backend.tokenFile:
+            raise ValueError("Interface backend credential is required")
+        return self
+
+
+class MatrixConfig(Model):
+    backend: BackendConnection
+    children: list[Identifier] = Field(min_length=1)
+    homeserver: str
+    userId: str
+    deviceId: str
+    tokenFile: str
+    roomId: str
+    stateDir: str = "/var/lib/family-controls-matrix"
+    encrypted: bool = True
+    trustedDevices: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def secure(self) -> "MatrixConfig":
+        if not self.homeserver.startswith("https://") or not self.backend.tokenFile:
+            raise ValueError("Matrix requires HTTPS and a backend credential")
         return self
 
 

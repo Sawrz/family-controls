@@ -1,139 +1,149 @@
 # Implementation and verification
 
-This follows the [2026-10-18 baseline review](2026-10-18-review.md). The reusable
-implementation is on `feature/reliable-family-controls`. No live configuration,
-credentials, user/device identities or runtime databases were changed. Existing
-source-mirror changes in `flake.nix`, `flake.lock` and `recovery/sources.json` were
-preserved. Build, isolated runtime testing and deployment activation remain
-separate outcomes.
+The hard-cut central architecture replaces the implementation described by the
+[2026-10-18 baseline review](2026-10-18-review.md). Work is on
+`feature/reliable-family-controls`. No live `nix-config`, production credentials,
+runtime databases or external chat accounts were changed. The user's existing
+`AGENTS.md` modification is untouched.
 
-## Delivered behavior
+## Delivered scope
 
-The application now has a pure policy domain, explicit application use cases and
-small ports for storage, enforcement, session observation, time and agent access.
-Telegram, HTTPS/Unix, CLI, Tk, SQLite, Timekpr and logind are adapters. Existing
-executable names remain available. The implementation deliberately uses fewer
-files than the suggested layout where splitting further would add indirection.
+The hexagonal local policy core is retained. A central application layer now owns
+accounts, approved devices, desired recurring policies and durable command
+coordination. FastAPI, SQLite, Argon2, OIDC, outbound agent synchronization,
+Telegram, Matrix, CLI and desktop code implement the relevant ports. Each runtime
+has its own Nix package and enable/configuration layer. The flake uses dendritic
+flake-parts feature files.
 
-Custom durations, total/remaining budgets, specific cutoffs, immediate sessions,
-unlimited budget today, access for the rest of the day and restoring defaults all
-use the same command contract. Requests have IDs, duration/reason, expiry,
-cancellation and one parent decision. Telegram provides presets/custom replies,
-all-day confirmation, denial reasons, history, mute/unmute and live status. The
-child UI stays responsive during network work and shows request outcomes.
+REST commands and reports are paired with persisted, resumable SSE streams.
+Devices enforce cached policy offline and acknowledge applied results. Device
+registration consumes a short-lived token and remains pending until an admin
+approves it. Scoped credentials can be revoked and replaced by reenrollment.
+Command identity survives backend/device restarts and uncertain delivery. An
+expired command is resolved on the device so a lost acknowledgement cannot turn
+an already committed grant into a false failure. Revoked parents' undelivered
+commands are cancelled; committed receipts remain truthful.
 
-See the [README](../../README.md) for precise semantics, commands, trust setup,
-state migration and reproducible checks.
+Password and OIDC registration/login have four independent switches. Approval is
+the default; identity-bound invitations can preapprove. Bootstrap is explicit,
+including OIDC-only administration. OIDC uses browser-bound state, nonce, PKCE,
+issuer/audience/authorized-party/signature/expiry validation, and explicit account
+links. Email does not confer account ownership. Messaging senders map to approved
+household accounts and adapters cannot perform administrative approvals.
+
+Custom durations, total and remaining budgets, cutoff changes, immediate sessions,
+unlimited budget today, all-day access, restoration, blocks, request muting,
+approval/denial and history share the application contract. Five-minute and
+one-minute native notifications include a request action; an application launcher
+opens the child request UI at any time. Tests cover notification delivery on a
+private D-Bus and actual Tk widgets under Xvfb.
+
+The parent web UI implements the approved family-planner design in SvelteKit and
+TypeScript, with English/German, responsive controls, shared-account rows,
+schedule editing and household administration. It uses the central API through
+an independent Nix-packaged static interface; see [web interface](../web-interface.md).
+See [deployment](../deployment.md) for the new Nix options and enrollment flow;
+old interfaces/options are intentionally not preserved.
 
 ## Baseline finding disposition
 
-| Findings | Implementation and evidence |
+| Area | Implementation and evidence |
 | --- | --- |
-| R01 TLS | Verified HTTPS, explicit CA support, hostname checks, no redirects/proxy inheritance. Local TLS tests and VM traffic. Existing certificate migration remains deployment work. |
-| R02, R21 desktop | Real Tk class at construction, safe close/reopen, background I/O, queued requests and visible failures. Xvfb tests exercise actual widgets. |
-| R03 concurrency | Per-user serialization, bounded command lock waits, SQLite transactions and durable operation receipts. Concurrent-grant and restart tests. |
-| R04 validation | Strict, action-specific input validation and representability checks before committing. Malformed cutoffs/fields leave state unchanged. Corrupt existing data is preserved for recovery. |
-| R05 enforcement results | Structured D-Bus calls, semantic result checks and configuration readback. No CLI exit-code inference. Real VM contract. |
-| R06, R16 resource bounds | Socket/body/response limits, connection slots, worker TLS handshakes, transport/D-Bus deadlines, bounded reconciliation concurrency, explicit network exposure. |
-| R07 local identity | Kernel peer credentials map to the actual managed account; parent commands unavailable locally. Root-owned non-writable socket directory. Real sibling/UID VM checks. |
-| R08 countdown | Current interval cutoff, live counters preferred, zero retained, unknown/stale distinguished. Boundary and telemetry tests. |
-| R09 homework | Homework is intersected with allowed access. Configured PlayTime activities are blocked during homework. All-day access explicitly clears today's homework restriction. |
-| R10 timezone | Aware policy clock, local-midnight expiry, legacy naive-time migration and monotonic locked accounting. DST day-length and daily-reset tests. |
-| R11 temporary policy | Full-week recurring baseline plus today's override; drift repair, boot rendering and stop hook. Midnight, process restart and crash checks. |
-| R12 approvals | Opaque expiring buttons, stable operation IDs, exact request IDs, original actor claim. Two-parent and stale-request tests. |
-| R13 transport | Durable Telegram inbox/offset, independent retryable updates, expiration of undelivered commands, stable operation identities after lost replies. |
-| R14 requests | Pending/approved/denied/cancelled/expired, cooldown, duration/reason, persistent notifications and explicit mute policy. Lifecycle tests. |
-| R15 API contract | Exact routes, bounded JSON objects, strict action fields, consistent error statuses and required idempotency keys. Protocol tests. |
-| R17 configuration | Pydantic configuration models and Nix build-time validation, bounded values, normalized intervals and explicit incompatible-option errors. |
-| R18 accounting/enforcement | Timekpr is the sole session enforcer. Locked usage uses observed monotonic intervals, subtracts native consumption, excludes unknown gaps and persists absolute charges. Concurrent inactive accounting is rejected. |
-| R19 efficiency | Read-only status, daily audit pruning, change-only Timekpr setters and periodic drift readback. Expired relay conversations/buttons are pruned. |
-| R20 device isolation | Bounded concurrent notification polling, independent durable update retries and handling of unavailable credential files. |
-| R22 partial minutes | Budget adjustments operate in seconds; deducting the last 59 seconds works. |
-| R23 DNS | Status explicitly says `external-unverified`; no unsupported enforcement claim. A real provider adapter needs a provider/account contract. |
-| R24 tests/CI | pytest fixtures/parametrization/Hypothesis, real local TLS/Unix/SQLite/Tk, coverage gate, NixOS VM, lint/type checks and desktop module wiring fixtures. |
-| R25, R26 structure | Small ports and composition root; shared boot/runtime encoding; Pydantic configuration; consistent Ruff formatting, types, package metadata and operator documentation. |
-| R27 privileges/audit | Unprivileged relay, hardened services, authenticated actor attribution and operation outcomes in history. Root remains necessary for the existing Timekpr administrative boundary. |
-| R28 encoding limits | Unrepresentable same-hour gaps/accounting transitions are rejected before persistence and during Nix configuration builds. No silently altered schedule. |
+| TLS and exposure | Verified outbound HTTPS, CA/hostname checks, no redirects or inherited proxy settings; no inbound device management port. Real TLS tests and VM traffic. |
+| Identity and privilege | Kernel UID selects the child account; approved accounts select parent identity. Separate unprivileged backend/interface services and scoped credentials. |
+| Concurrency and retries | Per-user command serialization, transactional state/receipts, ordered pending commands, independent stream cursors and retry-safe request decisions. |
+| Validation | Pydantic configuration/wire models, action-specific validation, bounded inputs, secret-safe validation errors and build-time configuration checking. |
+| Enforcement | Timekpr D-Bus results and configuration readback checked. Pending/applied states stay distinct, including failed recurring-policy delivery. |
+| Accounting and time | Fresh usage required for remaining-time changes; stale/unknown usage remains unknown. Measured locked intervals, no inferred suspend gaps, local-midnight expiry and DST tests. |
+| Recurring/temporary policy | Cached backend policy survives offline boots. Reconciliation repairs drift; stop restores recurring policy; daily overrides expire. |
+| Desktop | Real window class, request launcher, native threshold notifications, background I/O, visible request outcomes and UI-thread resource cleanup. |
+| Efficiency | Indexed pending/history queries, change-driven notifications, bounded queues/workers, limited concurrent Argon2 work and change-only Timekpr setters. |
+| Matrix encryption | Vodozemac SDK runtime, explicit trusted-device fingerprints, encryption mismatch refusal, durable inbox/crypto state and resource cleanup. No insecure Olm override. |
+| Documentation/maintainability | Shared policy validation and presentation, small ports, separate composition roots, deployment instructions, tests and reproducible flake checks. |
+| DNS | Explicitly externally unverified metadata; no unsupported enforcement claim. |
 
-The temporary baseline regression harness was retired after its scenarios moved
-into maintained pytest tests. The original review remains historical evidence;
-its old line references describe the original commit.
+## Validation
 
-## Completed checks
+Verified on 2026-10-26:
 
 | Check | Result |
 | --- | --- |
-| pytest suite, Python 3.12 and packaged Python 3.13 / Xvfb | **153 passed**, **85.49%** branch-aware coverage; warnings treated as errors |
-| Two-VM NixOS integration network | **Passed**: real Timekpr/logind, cross-VM verified TLS, sibling identity, activity termination, restart/SIGKILL, midnight and restoration; three relay pytest scenarios cover parent-button replay, network outage and durable recovery after a relay VM reboot |
-| Ruff formatting/configured lint and additional production S/SIM/C4 rules | **Passed** |
-| mypy | **Passed**, 14 source files |
-| x86_64 packages, validated agent/relay configs, NixOS and desktop wiring fixtures | **Passed** through recovery-wrapped `nix flake check` |
-| x86_64 and aarch64 output evaluation | **Passed** with `--all-systems --no-build`; no ARM runtime-build claim |
-| Locked PyPI runtime dependencies | **No known vulnerabilities found** by pip-audit with required hashes and a fresh advisory cache |
-| Patch whitespace | **Passed** (`git diff --check`) |
+| Packaged pytest suite | 182 passed; one Matrix SDK test runs separately |
+| Branch-aware coverage | 79.14%, above the 70% gate |
+| Actual encrypted Matrix SDK runtime | 1 passed on Python 3.14, including crypto-store shutdown |
+| Full x86_64 `nix flake check` | All 12 checks passed, including both VM suites, packages, interfaces and desktop wiring |
+| x86_64/aarch64 output evaluation | Passed with `--all-systems --no-build`; ARM runtime not tested |
+| Ruff, additional S/SIM/C4 rules, mypy, Nix formatting and whitespace | Passed |
+| Hash-locked PyPI runtime advisory audit | 49 packages audited, no skips and no known vulnerabilities reported |
+| Parent web browser workflows | 31 passed locally and against the Nix-built package through HTTPS Nginx |
+| Browser-to-device VM journeys | 6 passed in 231.73 seconds in fresh NixOS guests, with real Timekpr enforcement and native child UI |
+| Frontend execution coverage | 98.53% statements, 87.64% branches from source-mapped Chromium V8 coverage |
+| Web static checks | Svelte/TypeScript: zero errors or warnings; formatting and production build passed |
+| Web accessibility and layout | Axe WCAG A/AA and overflow checks passed at desktop, 390px and 320px, including German |
+| Web dependency advisory audit | npm reported zero known vulnerabilities in the locked dependency set |
 
-The dependency audit covers the Python runtime lock, not the complete NixOS,
-Timekpr or desktop dependency closure, and is an advisory snapshot rather than a
-guarantee that no vulnerability exists.
+The web interface's independent Impeccable review scored scope labeling, allowance
+previews and design provenance resolved, with a final `ship` disposition for those
+fixes. This is a design review, not a claim that automated accessibility checks
+replace manual assistive-technology testing. The web package uses the existing
+core API without changing core-package source.
+
+The suite includes:
+
+- Pytest with branch coverage required to reach 70%, warnings treated as errors,
+  fixtures, parametrization, monkeypatch and property tests. No `unittest.mock`,
+  warning suppressions or dependency source patches.
+- Packaged Python 3.13 tests with real HTTPS, Unix sockets, SQLite, Tk/Xvfb and a
+  private freedesktop notification service. The encrypted Matrix composition
+  root additionally runs against its actual Python 3.14/Vodozemac SDK package.
+- Ruff formatting/configured checks, additional production security/style rules,
+  mypy and Nix formatting.
+- Separate package builds, validated Telegram/Matrix service configurations,
+  enabled/disabled module checks and Home Manager wiring fixtures.
+- Two isolated x86_64 NixOS VMs: managed device (1,536 MiB) and backend (1,024 MiB),
+  real Timekpr/logind/systemd/TLS, enrollment and approval, replay, both chat
+  adapters, network outage, backend reboot, agent SIGKILL, sibling UID isolation,
+  measured locked usage, observed game-process termination, midnight and stop-hook
+  restoration. Both guests shut down after the test.
+- A separate browser-to-device run with Chromium and HTTPS Nginx on the backend
+  VM (2,048 MiB), and the native child UI on the managed-device VM (1,536 MiB).
+  Six ordered journeys cover browser enrollment/approval, a custom grant with
+  lost-response retry, five/one-minute warnings and a child request, real activity
+  termination at exhaustion, extensions/unlimited/blocking, queued delivery
+  through a backend restart, and routine persistence through an agent restart.
+  Screenshots, JUnit results and both journals are saved in the check output.
+  See [VM user journeys](../vm-user-journeys.md) for reproduction and boundaries.
+- Hash-locked PyPI runtime advisory audit: 49 packages, no known vulnerabilities
+  reported. This is a point-in-time advisory result, not an audit of the entire
+  NixOS/Timekpr/desktop closure.
 
 ## Verification boundaries
 
-The Python suite runs on Python 3.12 and the pinned Nix Python 3.13 environment.
-Warnings are errors; coverage includes application/adapters and requires at least
-70% with branches. No `unittest.mock`, expected-failure masking or dependency
-patches are used. Ruff's configured rules, additional production security/style
-rules, mypy and Nix formatting are checked.
+External Telegram and Matrix transports and the OIDC provider are simulated in
+workflow tests. The Matrix runtime check uses the real SDK and crypto store but
+substitutes homeserver I/O. These checks do not prove interoperability with a
+particular live homeserver, identity provider, Telegram group or Element session.
+No live messages were sent. The deployment should verify those configured accounts
+and their trust/permission settings after activation.
 
-The NixOS suite boots a managed-device VM (1,536 MiB RAM) and a relay VM (768 MiB)
-on an isolated network. The managed device runs real Timekpr, systemd, logind,
-TLS, SQLite and the CLI. The relay pytest scenarios run as an unprivileged user,
-substitute only the external Telegram API, and connect over verified HTTPS to
-the managed device. A firewall-induced outage queues a grant; the relay VM then
-reboots and recovers that persisted update without granting time twice. Both
-synthetic PAM sessions must start successfully before tests proceed. Tests cover
-current-admin attribution, replay, sibling isolation, pending/applied state,
-locked usage, an observed activity being terminated, service stop, SIGKILL restart
-and rollover to a new local day. The activity test requires Timekpr to detect the
-running process before exhausting its budget and checks its termination signal.
-Certificates and credentials are generated or synthetic test fixtures; no real
-Telegram account or production state is needed. The relay tests exercise the
-adapter and durable inbox in separate Python processes, not a live Telegram bot
-daemon. Both VMs shut down after the run; the repository retains their reproducible
-test definitions and the README includes a command to run them again.
+The broader `web-browser` tests use a deterministic enforcement port alongside
+real API, SQLite, HTTP agent synchronization and command application. The new
+`web-journeys` suite connects browser actions to actual operating-system enforcement
+in VMs. The web OIDC test substitutes the external provider exchange while
+exercising the browser callback and session-cookie flow.
 
-Home Manager wiring fixtures evaluate this repository's exported modules against
-a minimal host option interface: enabled/disabled behavior, package injection,
-notification/autostart configuration and the Plasma window-class rule. They are
-not a claim of real Home Manager activation or a Plasma/Wayland desktop session.
+Home Manager tests use a minimal host option interface; they do not activate a
+real Plasma or Wayland session. Physical suspend, compositor fullscreen behavior,
+actual application process masks and existing production state require deployment
+validation. ARM evaluation does not establish ARM runtime behavior.
 
-## Remaining deployment checks and product choices
+Timekpr cannot encode separated/mixed-accounting windows within one hour and caps
+a daily allowance at 86,400 seconds. Those inputs are rejected or documented,
+not silently approximated. A machine-wide failure is not an atomic transaction
+across the backend, agent and Timekpr. Backend receipts/events are retained for
+replay; operators must monitor and back up state. Telegram notifications can
+repeat after an uncertain send, while repeated commands cannot repeat a grant.
 
-These require the deployment or an explicit product/provider choice:
-
-- **Trust rollout:** choose the reachable device hostname/address, certificate/SANs,
-  relay CA paths, firewall exposure and runtime secret ownership in `nix-config`.
-  Existing CN-only certificates are intentionally not overwritten.
-- **Real Telegram account:** verify the deployed bot is a group administrator,
-  update/privacy settings, delivery and rate limits against that account. No live
-  Telegram messages were sent during development.
-- **Actual desktops/devices:** activate the modules, verify the compositor's
-  topmost/fullscreen behavior, real application masks and multi-session behavior,
-  and exercise physical suspend/resume. Synthetic clocks and headless logind
-  sessions cannot prove those hardware/compositor outcomes.
-- **Existing state:** the migration is fixture-tested and preserves identifiers and
-  usage. Production databases were not inspected or migrated. Corrupt production
-  state needs a separately reviewed recovery using its preserved data/backup.
-- **DNS:** select a provider and desired failure/verification behavior before
-  implementing its adapter. Desired profile names alone cannot enforce DNS.
-- **Platform/backend limits:** aarch64 outputs evaluate successfully, but this
-  host has no ARM execution platform/binfmt handler; an ARM builder is needed for
-  runtime validation. Timekpr cannot encode multiple separated intervals/accounting
-  modes within one hour; native daily allowances cap at 86,400 seconds. These are
-  documented backend constraints, not silently approximated capabilities.
-
-The original later-feature proposals—named holiday schedules, weekday-specific
-budgets, automatic temporary pauses, usage summaries and a second parent
-interface—remain product backlog. Shared-device budgets, rewards, browsing or
-location tracking remain deferred because they require additional scope and
-privacy decisions. They are not prerequisites for the implemented daily-control
-workflows.
+Named holiday schedules, weekday-specific budgets, temporary pause timers and
+usage summaries remain optional product backlog. DNS enforcement needs a provider
+contract. The web interface does not add these backend capabilities.

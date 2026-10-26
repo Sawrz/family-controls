@@ -43,7 +43,11 @@ def test_real_window_creation_close_and_reopen(app):
     assert app.label_var.get() == "00:59"
     app.destroy_window()
     app.render(status)
+    assert app.window is None
+    app.show_requested.set()
+    app.tick()
     assert app.window.winfo_exists()
+    app.destroy_window()
     app.render({"phase": "idle"})
     assert app.window is None
 
@@ -79,5 +83,6 @@ def test_invalid_duration_and_network_failure_are_visible(app):
     app.tick()
     assert app.label_var.get() == "Unavailable"
     assert "Device unavailable" in app.detail_var.get()
+    app.visible_by_choice = True
     app.render({"phase": "idle", "muted": True})
     assert app.request_button.instate(["disabled"])

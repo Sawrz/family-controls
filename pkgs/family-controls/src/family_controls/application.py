@@ -73,6 +73,56 @@ ACTIONS = ADJUSTMENTS | {
 }
 
 
+def validate_command(action: str, payload: dict) -> Command:
+    """Validate a transport-independent action before persisting delivery intent."""
+    if action not in ACTIONS:
+        raise InvalidCommand("Unknown action")
+    try:
+        command = Command.model_validate(payload)
+    except ValidationError as exc:
+        raise InvalidCommand("Invalid command fields or values") from exc
+    if action in ADJUSTMENTS and (
+        command.minutes is None
+        or (command.minutes == 0 and action not in {"set-limit", "set-remaining"})
+    ):
+        raise InvalidCommand("Provide minutes from 1 to 1440 (zero is valid for set operations)")
+    fields = {"expectedRevision"}
+    if action in ADJUSTMENTS:
+        fields.add("minutes")
+    fields |= {
+        "extend-access": {"until"},
+        "allow-until": {"until"},
+        "block": {"today", "days"},
+        "request-time": {"minutes", "reason"},
+        "cancel-request": {"requestId"},
+        "decide-request": {"requestId", "decision", "minutes", "reason"},
+    }.get(action, set())
+    if command.model_fields_set - fields:
+        raise InvalidCommand("Fields do not apply to this action")
+    if action == "block" and command.today and command.days is not None:
+        raise InvalidCommand("Choose today or days, not both")
+    if action == "request-time" and command.minutes == 0:
+        raise InvalidCommand("Request a positive duration")
+    if command.until is not None:
+        minute(command.until)
+    if action in {"cancel-request", "decide-request"} and not command.requestId:
+        raise InvalidCommand("A request ID is required")
+    if action == "decide-request":
+        if command.decision not in {
+            "deny",
+            "add-time",
+            "grant-session",
+            "unlimited-today",
+            "allow-today",
+        }:
+            raise InvalidCommand(
+                "Choose add-time, grant-session, unlimited-today, allow-today, or deny"
+            )
+        if command.decision in {"add-time", "grant-session"} and not command.minutes:
+            raise InvalidCommand("Approval needs a positive minute amount")
+    return command
+
+
 class Service:
     """Coordinate policy without depending on a transport or enforcement library."""
 
@@ -304,36 +354,7 @@ class Service:
             raise KeyError("Unknown action")
         if not operation or len(operation) > 128 or not actor or len(actor) > 128:
             raise InvalidCommand("A bounded operation ID and actor are required")
-        try:
-            command = Command.model_validate(payload)
-        except ValidationError as exc:
-            raise InvalidCommand("Invalid command fields or values") from exc
-        if action in ADJUSTMENTS and (
-            command.minutes is None
-            or (command.minutes == 0 and action not in {"set-limit", "set-remaining"})
-        ):
-            raise InvalidCommand(
-                "Provide minutes from 1 to 1440 (zero is valid for set operations)"
-            )
-        fields = {"expectedRevision"}
-        if action in ADJUSTMENTS:
-            fields.add("minutes")
-        fields |= {
-            "extend-access": {"until"},
-            "allow-until": {"until"},
-            "block": {"today", "days"},
-            "request-time": {"minutes", "reason"},
-            "cancel-request": {"requestId"},
-            "decide-request": {"requestId", "decision", "minutes", "reason"},
-        }.get(action, set())
-        if command.model_fields_set - fields:
-            raise InvalidCommand("Fields do not apply to this action")
-        if action == "block" and command.today and command.days is not None:
-            raise InvalidCommand("Choose today or days, not both")
-        if action == "request-time" and command.minutes == 0:
-            raise InvalidCommand("Request a positive duration")
-        if command.until is not None:
-            minute(command.until)
+        command = validate_command(action, payload)
         fingerprint = hashlib.sha256(
             json.dumps([user, action, payload, actor], sort_keys=True).encode()
         ).hexdigest()

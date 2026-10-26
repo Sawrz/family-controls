@@ -3,9 +3,9 @@ import sys
 
 import pytest
 from family_controls.adapters import cli
-from family_controls.adapters.http import Gateway
+from family_controls.adapters.client import Gateway
 from family_controls.bootstrap import SystemClock, stop_event
-from family_controls.config import RelayConfig, secret
+from family_controls.config import BackendConnection, secret
 from family_controls.domain import Unavailable
 
 
@@ -41,18 +41,19 @@ def test_cli_remote_failure_prints_retry_identity(monkeypatch, tmp_path, capsys)
     token.write_text("secret")
     calls = []
 
-    def request(self, url, **kwargs):
+    def request(self, url, payload=None, **kwargs):
+        kwargs["payload"] = payload
         calls.append((url, kwargs))
         raise Unavailable("Offline")
 
-    monkeypatch.setattr(cli.HTTPClient, "request", request)
+    monkeypatch.setattr(cli.BackendClient, "request", request)
     monkeypatch.setattr(
         sys,
         "argv",
         [
             "ctl",
-            "--host",
-            "localhost:443",
+            "--backend",
+            "https://localhost:443",
             "--token-file",
             str(token),
             "--operation-id",
@@ -70,38 +71,23 @@ def test_cli_remote_failure_prints_retry_identity(monkeypatch, tmp_path, capsys)
     assert "retry" in capsys.readouterr().err
 
 
-def test_gateway_preserves_device_user_and_authenticates_ipv6(monkeypatch, tmp_path):
-    token = tmp_path / "token"
-    token.write_text("test-secret")
-    cfg = RelayConfig.model_validate(
-        {
-            "parentGroupChatId": "-42",
-            "hostChildren": {
-                "Kid": {
-                    "host": "::1",
-                    "user": "existing-user",
-                    "deviceId": "original-device",
-                    "apiTokenFile": str(token),
-                }
-            },
-        }
-    )
-    gateway = Gateway(cfg)
+def test_gateway_uses_only_backend_and_preserves_operation_actor(monkeypatch):
+    gateway = Gateway(BackendConnection(url="https://backend"))
     calls = []
 
-    def request(url, **kwargs):
-        calls.append((url, kwargs))
-        return {"user": "existing-user", "phase": "idle", "application": {}, "summary": {}}
+    def request(route, payload=None, **kwargs):
+        calls.append((route, payload, kwargs))
+        return {}
 
-    monkeypatch.setattr(gateway.clients["Kid"], "request", request)
-    gateway.status("kid")
-    gateway.command("Kid", "add-time", {"minutes": 25}, "op", "parent")
-    assert calls[0][0] == "https://[::1]:18451/v1/users/existing-user/status"
-    assert calls[1][1]["headers"] == {
-        "Authorization": "Bearer test-secret",
-        "Idempotency-Key": "op",
-        "X-Family-Actor": "parent",
-    }
+    monkeypatch.setattr(gateway.client, "request", request)
+    gateway.command("Kid", "add-time", {"minutes": 25}, "op", "telegram:7")
+    assert calls == [
+        (
+            "/api/v1/children/Kid/commands/add-time",
+            {"minutes": 25},
+            {"headers": {"Idempotency-Key": "op", "X-Family-Actor": "telegram:7"}},
+        )
+    ]
 
 
 @pytest.mark.parametrize("value", ["", "  ", "two words", "one\ntwo"])
@@ -140,14 +126,8 @@ def test_build_configuration_validation_does_not_open_runtime_services(
         json.dumps(
             {
                 "parentGroupChatId": "-42",
-                "hostChildren": {
-                    "child": {
-                        "host": "localhost",
-                        "user": "child",
-                        "deviceId": "unchanged",
-                        "apiTokenFile": "/unavailable",
-                    }
-                },
+                "children": ["child"],
+                "backend": {"url": "https://backend", "tokenFile": "/unused"},
             }
         )
     )

@@ -41,6 +41,9 @@ class Gateway:
         self.offline = set()
         self.calls = []
 
+    def authorize(self, actor):
+        return {"username": actor}
+
     def history(self, child):
         return self.service.repository.history(child)
 
@@ -63,15 +66,8 @@ def relay(setup):
     config = RelayConfig.model_validate(
         {
             "parentGroupChatId": "-42",
-            "hostChildren": {
-                name: {
-                    "host": "localhost",
-                    "user": name,
-                    "deviceId": name,
-                    "apiTokenFile": "/unused",
-                }
-                for name in ("child", "sibling")
-            },
+            "children": ["child", "sibling"],
+            "backend": {"url": "https://backend", "tokenFile": "/unused"},
         }
     )
     adapter = Relay(config, "test-token", gateway, setup.repository, setup.clock, transport)
@@ -217,13 +213,17 @@ def test_queued_offline_command_expires_instead_of_granting_next_day(relay):
     assert "expired" in texts(relay)[-1]
 
 
-def test_request_sync_isolates_offline_sibling_and_deduplicates_notifications(relay):
+def test_request_event_does_not_query_an_offline_sibling(relay):
     relay.gateway.offline.add("child")
-    relay.setup.service.execute(
+    request = relay.setup.service.execute(
         "sibling", "request-time", {"reason": "Finish homework"}, "r", "child"
+    )["pendingRequest"]
+    relay.adapter.event(
+        {
+            "kind": "request.changed",
+            "data": {"child": "sibling", "request": request},
+        }
     )
-    relay.adapter.sync_requests()
-    relay.adapter.sync_requests()
     assert len(texts(relay)) == 1 and "Finish homework" in texts(relay)[0]
 
 
@@ -244,20 +244,6 @@ def test_expired_button_and_help_are_safe(relay):
     assert not relay.gateway.calls
     assert "expired" in texts(relay)[0]
     assert "/family" in texts(relay)[1]
-
-
-def test_missing_child_credential_does_not_stop_request_sync(relay, monkeypatch):
-    status = relay.gateway.status
-
-    def partial_outage(child):
-        if child == "child":
-            raise FileNotFoundError("Credential not mounted")
-        return status(child)
-
-    monkeypatch.setattr(relay.gateway, "status", partial_outage)
-    relay.setup.service.execute("sibling", "request-time", {}, "request", "child")
-    relay.adapter.sync_requests()
-    assert len(texts(relay)) == 1
 
 
 @pytest.mark.parametrize(

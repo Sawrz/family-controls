@@ -3,24 +3,36 @@
 import argparse
 import json
 import sys
+from pathlib import Path
 from uuid import uuid4
 
 from ..application import ACTIONS, ADJUSTMENTS
-from ..config import secret
+from ..config import BackendConnection
 from ..domain import InvalidCommand, Unavailable
-from .http import HTTPClient, unix_request
+from .client import BackendClient
+from .http import unix_request
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket-path", default="/run/family-controls/control.sock")
-    parser.add_argument("--host", help="Agent hostname:port; HTTPS certificate must match")
+    parser.add_argument("--backend", help="Central backend HTTPS origin")
     parser.add_argument("--token-file")
     parser.add_argument("--ca-file")
     parser.add_argument("--operation-id", help="Reuse this ID when retrying the same command")
-    parser.add_argument("--actor", default="cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
+    login = subparsers.add_parser("login")
+    login.add_argument("--username", required=True)
+    login.add_argument("--password-file", required=True)
+    login.add_argument("--output-token-file", required=True)
+    api = subparsers.add_parser(
+        "api", help="Administrative API: enrollment, approvals and accounts"
+    )
+    api.add_argument("route")
+    api.add_argument("--method", choices=["GET", "POST", "PUT", "DELETE"], default="GET")
+    api.add_argument("--body-file")
+
     for action in sorted(ACTIONS | {"remote-status", "history"}):
         sub = subparsers.add_parser(action)
         if action not in {"request-time", "cancel-request"}:
@@ -62,20 +74,39 @@ def main() -> None:
                 operation,
             )
         else:
-            if not args.host or not args.token_file:
-                parser.error("Remote commands require --host and --token-file")
-            action = "status" if args.command == "remote-status" else args.command
-            client = HTTPClient(args.ca_file)
-            result = client.request(
-                f"https://{args.host}/v1/users/{args.user}/{action}",
-                method="GET" if action in {"status", "history"} else "POST",
-                payload=None if action in {"status", "history"} else payload,
-                headers={
-                    "Authorization": f"Bearer {secret(args.token_file)}",
-                    "Idempotency-Key": operation,
-                    "X-Family-Actor": args.actor,
-                },
+            if not args.backend or (args.command != "login" and not args.token_file):
+                parser.error("Remote commands require --backend and --token-file")
+            client = BackendClient(
+                BackendConnection(url=args.backend, tokenFile=args.token_file, caFile=args.ca_file)
             )
+            if args.command == "login":
+                result = client.request(
+                    "/api/v1/auth/login",
+                    {
+                        "username": args.username,
+                        "password": Path(args.password_file).read_text().rstrip("\r\n"),
+                    },
+                )
+                path = Path(args.output_token_file)
+                with path.open("x") as output:
+                    path.chmod(0o600)
+                    output.write(result.pop("token"))
+                result["tokenFile"] = str(path)
+            elif args.command == "api":
+                body = json.loads(Path(args.body_file).read_text()) if args.body_file else None
+                result = client.request(
+                    args.route, body, method=args.method, headers={"Idempotency-Key": operation}
+                )
+            else:
+                action = "status" if args.command == "remote-status" else args.command
+                route = f"/api/v1/children/{args.user}/" + (
+                    action if action in {"status", "history"} else "commands/" + action
+                )
+                result = client.request(
+                    route,
+                    None if action in {"status", "history"} else payload,
+                    headers={"Idempotency-Key": operation},
+                )
         print(json.dumps(result, indent=2, sort_keys=True))
     except (InvalidCommand, Unavailable, OSError) as exc:
         print(f"{exc}\nOperation ID for a safe retry: {operation}", file=sys.stderr)

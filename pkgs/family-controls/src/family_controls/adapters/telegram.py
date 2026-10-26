@@ -2,7 +2,6 @@
 
 import hashlib
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
 from typing import Any
 from uuid import uuid4
@@ -11,68 +10,11 @@ from ..application import ADJUSTMENTS as DURATION_ACTIONS
 from ..config import RelayConfig
 from ..domain import InvalidCommand, Unavailable, parse_duration
 from ..ports import AgentGateway, Clock
+from ..presentation import COMMANDS, LABELS, status_text
 from .http import HTTPClient, RemoteError
 from .sqlite import Repository
 
 LOG = logging.getLogger(__name__)
-COMMANDS = {
-    "addtime": "add-time",
-    "deducttime": "deduct-time",
-    "extendaccess": "extend-access",
-    "reduceaccess": "reduce-access",
-    "setlimit": "set-limit",
-    "setremaining": "set-remaining",
-    "session": "grant-session",
-    "until": "allow-until",
-    "unlimited": "unlimited-today",
-    "allday": "allow-today",
-    "restore": "restore-today",
-    "block": "block",
-    "unblock": "unblock",
-    "mute": "mute",
-    "unmute": "unmute",
-}
-LABELS = {
-    "add-time": "Add time",
-    "set-limit": "Set today's limit",
-    "set-remaining": "Set time left",
-    "grant-session": "Allow a session now",
-    "allow-until": "Allow until",
-    "unlimited-today": "Unlimited budget today",
-    "allow-today": "Allow rest of day",
-    "restore-today": "Restore today's defaults",
-    "block": "Pause today",
-    "unblock": "Unblock",
-    "mute": "Mute requests",
-    "unmute": "Unmute requests",
-}
-
-
-def status_text(child: str, status: dict) -> str:
-    application = status["application"]
-    request = status.get("request")
-    lines = [
-        child,
-        f"State: {status['phase'].replace('_', ' ')} · {status['connectivity']}",
-        f"Play time left: {status['summary']['playTimeLeft']}",
-        f"Access until: {status.get('allowedUntil') or 'outside current window'}",
-        f"Today's budget: {'Unlimited' if status.get('unlimitedToday') else str(status['effectiveDailyLimitMinutes']) + 'm'}",
-        f"Changes: {application['status']}",
-    ]
-    if application.get("error"):
-        lines.append(application["error"])
-    if status.get("lastSeen"):
-        lines.append(f"Last seen: {status['lastSeen']}")
-    if status.get("blocked"):
-        lines.append(f"Manually blocked through {status['blockedUntilDate']}")
-    if status.get("muted"):
-        lines.append("Requests muted until a parent unmutes them")
-    if request:
-        lines.append(
-            f"Request: {request['status']}"
-            + (f" · {request['decided_by']}" if request.get("decided_by") else "")
-        )
-    return "\n".join(lines)
 
 
 class Relay:
@@ -108,7 +50,7 @@ class Relay:
         return response.get("result", {}).get("status") in {"administrator", "creator"}
 
     def child_name(self, value: str) -> str:
-        for child in self.config.hostChildren:
+        for child in self.config.children:
             if child.casefold() == value.casefold():
                 return child
         raise InvalidCommand("Unknown child")
@@ -284,6 +226,7 @@ class Relay:
         actor = f"telegram:{sender}"
         operation = f"tg:{self.identity}:{update['update_id']}"
         try:
+            self.gateway.authorize(actor)
             if callback:
                 self.callback(callback, sender, actor)
             else:
@@ -389,9 +332,7 @@ class Relay:
             self.repository.relay_set(f"conversation:{sender}:{reply_id}", None)
             self.send("Prompt cancelled. Use /family to start again.")
         elif command in {"family", "status", "history"}:
-            for child in (
-                [self.child_name(parts[1])] if len(parts) == 2 else self.config.hostChildren
-            ):
+            for child in [self.child_name(parts[1])] if len(parts) == 2 else self.config.children:
                 try:
                     if command == "history":
                         self.history(child)
@@ -422,7 +363,7 @@ class Relay:
                                 prompt=action in DURATION_ACTIONS or action == "allow-until",
                             )
                         ]
-                        for child in self.config.hostChildren
+                        for child in self.config.children
                     ],
                 )
                 return
@@ -511,25 +452,20 @@ class Relay:
             state["pending"].remove(update)
             self.repository.relay_set("transport", state)
 
-    def sync_requests(self) -> None:
-        with ThreadPoolExecutor(max_workers=min(4, len(self.config.hostChildren))) as pool:
-            futures = {
-                pool.submit(self.gateway.status, child): child for child in self.config.hostChildren
-            }
-            for future in as_completed(futures):
-                child = futures[future]
-                try:
-                    status = future.result()
-                    request = status.get("pendingRequest")
-                    if request and self.repository.relay_get("notified:" + child) != request["id"]:
-                        self.send(
-                            f"{child} requested more time"
-                            + (f": {request['reason']}" if request.get("reason") else ""),
-                            self.keyboard(child, status),
-                        )
-                        self.repository.relay_set("notified:" + child, request["id"])
-                except (Unavailable, RemoteError, OSError, KeyError, ValueError):
-                    LOG.warning("Cannot synchronize requests for %s", child)
+    def event(self, event: dict) -> None:
+        child = event["data"].get("child")
+        if child not in self.config.children:
+            return
+        if event["kind"] == "request.changed":
+            request = event["data"].get("request")
+            if request and request["status"] == "pending":
+                status = self.gateway.status(child)
+                self.send(
+                    f"{child} requested more time: {request.get('reason', '')}",
+                    self.keyboard(child, status),
+                )
+        elif event["kind"] in {"command.applied", "command.failed", "command.expired"}:
+            self.card(child)
 
     def run(self, stop: Any) -> None:
         delay = 1

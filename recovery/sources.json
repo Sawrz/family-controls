@@ -12,6 +12,10 @@
     "ssh://git@ssh.git.wrzalek.com/homelab/upstream-sops-nix.git": {
       "primary": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-sops-nix.git",
       "recovery": "https://github.com/Mic92/sops-nix.git"
+    },
+    "ssh://git@ssh.git.wrzalek.com/homelab/upstream-flake-parts.git": {
+      "primary": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-flake-parts.git",
+      "recovery": "https://github.com/hercules-ci/flake-parts.git"
     }
   },
   "required_repositories": {

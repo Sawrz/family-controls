@@ -186,6 +186,14 @@ class Repository:
             row = self.db.execute("SELECT value FROM relay_state WHERE key=?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
 
+    def relay_items(self, prefix: str) -> list[tuple[str, dict]]:
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT key,value FROM relay_state WHERE substr(key,1,?)=? ORDER BY rowid",
+                (len(prefix), prefix),
+            ).fetchall()
+        return [(key, json.loads(value)) for key, value in rows]
+
     def relay_set(self, key: str, value: object) -> None:
         with self.transaction():
             if value is None:

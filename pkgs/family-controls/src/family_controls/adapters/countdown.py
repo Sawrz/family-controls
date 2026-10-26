@@ -1,13 +1,20 @@
 """Responsive Tk adapter. All socket I/O runs off the UI thread."""
 
 import argparse
+import fcntl
+import os
+import socket
+import threading
 import time
 import tkinter as tk
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 from tkinter import ttk
+from typing import Any
 from uuid import uuid4
 
 from ..domain import duration, parse_duration
+from ..notifications import Warnings
 from .http import unix_request
 
 
@@ -32,6 +39,11 @@ class CountdownApp:
         self.next_poll = 0.0
         self.queued: tuple[str, dict, str] | None = None
         self.mutating = False
+        self.warnings = Warnings()
+        self.notifications: Any = None
+        self.show_requested = threading.Event()
+        self.visible_by_choice = False
+        self.last_request: object = None
 
     def ensure_window(self) -> None:
         if self.window is not None and self.window.winfo_exists():
@@ -62,6 +74,7 @@ class CountdownApp:
         if self.window is not None:
             self.window.destroy()
             self.window = None
+        self.visible_by_choice = False
 
     def submit(self, route: str, payload: dict) -> None:
         if self.mutating or self.queued:
@@ -75,6 +88,7 @@ class CountdownApp:
             minutes = parse_duration(self.minutes_var.get())
         except ValueError as exc:
             self.feedback = str(exc)
+            self.render(self.latest)
             return
         self.submit("/v1/request-time", {"minutes": minutes, "reason": self.reason_var.get()})
 
@@ -86,7 +100,16 @@ class CountdownApp:
     def render(self, status: dict) -> None:
         self.latest = status
         request = status.get("request")
-        show = status.get("phase") != "idle" or status.get("muted") or request is not None
+        warning = self.warnings.observe(status)
+        if warning is not None:
+            self.visible_by_choice = True
+            if self.notifications:
+                self.executor.submit(self.notifications.notify, warning)
+        if request != self.last_request:
+            self.last_request = request
+            if request is not None:
+                self.visible_by_choice = True
+        show = self.visible_by_choice or status.get("phase") in {"expired", "unknown"}
         if not show:
             self.destroy_window()
             return
@@ -124,6 +147,13 @@ class CountdownApp:
         if self.closed:
             return
         try:
+            if self.show_requested.is_set():
+                self.show_requested.clear()
+                self.visible_by_choice = True
+                self.render(self.latest)
+                if self.window:
+                    self.window.deiconify()
+                    self.window.lift()
             if self.future is not None and self.future.done():
                 future, self.future = self.future, None
                 try:
@@ -151,9 +181,19 @@ class CountdownApp:
             self.root.after(500, self.tick)
 
     def close(self) -> None:
+        if self.closed:
+            return
         self.closed = True
         self.executor.shutdown(wait=False, cancel_futures=True)
+        if self.notifications:
+            self.notifications.close()
+        self.destroy_window()
+        self.request_button = self.cancel_button = None
+        # Tk variables must be finalized on the UI thread, before cyclic garbage
+        # collection can run in a later network/notification worker.
+        del self.label_var, self.detail_var, self.minutes_var, self.reason_var
         self.root.destroy()
+        del self.root
 
     def run(self) -> None:
         self.tick()
@@ -163,5 +203,48 @@ class CountdownApp:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket-path", default="/run/family-controls/control.sock")
+    parser.add_argument("--show", action="store_true", help="Open the request window immediately")
     args = parser.parse_args()
-    CountdownApp(args.socket_path).run()
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+    address = str(runtime / "family-controls-ui.sock")
+    with (runtime / "family-controls-ui.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if args.show:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(5)
+                    client.connect(address)
+                    client.sendall(b"show")
+            return
+        from .desktop_notifications import DesktopNotifications
+
+        app = CountdownApp(args.socket_path)
+        app.notifications = DesktopNotifications(app.show_requested.set)
+        app.visible_by_choice = args.show
+        Path(address).unlink(missing_ok=True)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(address)
+            Path(address).chmod(0o600)
+            listener.listen(4)
+            listener.settimeout(1)
+
+            def listen() -> None:
+                while not app.closed:
+                    try:
+                        connection, _ = listener.accept()
+                        with connection:
+                            connection.settimeout(1)
+                            if connection.recv(4) == b"show":
+                                app.show_requested.set()
+                    except TimeoutError:
+                        continue
+
+            worker = threading.Thread(target=listen, daemon=True)
+            worker.start()
+            try:
+                app.run()
+            finally:
+                app.closed = True
+                worker.join(timeout=2)
+                Path(address).unlink(missing_ok=True)

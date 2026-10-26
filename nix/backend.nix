@@ -1,0 +1,87 @@
+{ self, ... }: {
+  flake.nixosModules.backend =
+    {
+      config,
+      lib,
+      pkgs,
+      ...
+    }:
+    let
+      cfg = config.services.family-controls.backend;
+      json = pkgs.formats.json { };
+      raw = json.generate "family-controls-backend.json" (
+        cfg.settings
+        // {
+          authentication = (cfg.settings.authentication or { }) // {
+            password = {
+              registration = cfg.authentication.password.registration.enable;
+              login = cfg.authentication.password.login.enable;
+            };
+            oidc = {
+              registration = cfg.authentication.oidc.registration.enable;
+              login = cfg.authentication.oidc.login.enable;
+            };
+            requireApproval = cfg.authentication.requireApproval;
+          };
+        }
+      );
+      validated = pkgs.runCommand "validated-backend.json" { } ''
+        ${
+          self.packages.${pkgs.stdenv.hostPlatform.system}.family-controls-backend
+        }/bin/family-controls-backend --config ${raw} --check-config
+        cp ${raw} "$out"
+      '';
+      stateDir = cfg.settings.stateDir or "/var/lib/family-controls-backend";
+      toggle =
+        default:
+        lib.mkOption {
+          type = lib.types.bool;
+          inherit default;
+        };
+    in
+    {
+      options.services.family-controls.backend = {
+        enable = lib.mkEnableOption "Family Controls central API";
+        settings = lib.mkOption {
+          type = json.type;
+          default = { };
+          description = "Validated backend configuration; secrets must be runtime file paths.";
+        };
+        authentication = {
+          password.registration.enable = toggle false;
+          password.login.enable = toggle true;
+          oidc.registration.enable = toggle false;
+          oidc.login.enable = toggle true;
+          requireApproval = toggle true;
+        };
+      };
+      config = lib.mkIf cfg.enable {
+        users.groups.family-controls-backend = { };
+        users.users.family-controls-backend = {
+          isSystemUser = true;
+          group = "family-controls-backend";
+        };
+        systemd.tmpfiles.rules = [ "d ${stateDir} 0700 family-controls-backend family-controls-backend -" ];
+        systemd.services.family-controls-backend = {
+          wantedBy = [ "multi-user.target" ];
+          after = [ "network-online.target" ];
+          wants = [ "network-online.target" ];
+          serviceConfig = {
+            User = "family-controls-backend";
+            Group = "family-controls-backend";
+            ExecStart = "${
+              self.packages.${pkgs.stdenv.hostPlatform.system}.family-controls-backend
+            }/bin/family-controls-backend --config ${validated}";
+            Restart = "on-failure";
+            RestartSec = 3;
+            NoNewPrivileges = true;
+            ProtectSystem = "strict";
+            ProtectHome = true;
+            PrivateTmp = true;
+            UMask = "0077";
+            ReadWritePaths = [ stateDir ];
+          };
+        };
+      };
+    };
+}

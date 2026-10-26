@@ -56,8 +56,13 @@ def hours_string(hours: dict[str, dict[str, int]]) -> str:
 
 def validate_config(config: AgentConfig) -> None:
     for user in config.managedUsers.values():
-        for day in range(1, 8):
-            hour_map(user.timeWindows.for_day(day), user.timeWindows.for_day(day, homework=True))
+        validate_user(user)
+
+
+def validate_user(user: User) -> None:
+    """Reject recurring schedules that Timekpr cannot represent exactly."""
+    for day in range(1, 8):
+        hour_map(user.timeWindows.for_day(day), user.timeWindows.for_day(day, homework=True))
 
 
 class Timekpr:
@@ -195,6 +200,9 @@ def render_user(name: str, cfg: User) -> str:
 
 
 def render_main() -> None:
+    from .cached_policy import load_cached_policy
+    from .sqlite import Repository
+
     parser = argparse.ArgumentParser(
         description="Render recurring Timekpr configuration without changing usage"
     )
@@ -202,6 +210,13 @@ def render_main() -> None:
     parser.add_argument("--directory", default="/var/lib/timekpr/config")
     args = parser.parse_args()
     config = AgentConfig.model_validate_json(Path(args.config).read_text())
+    state = Path(config.agent.stateDir) / "state.sqlite"
+    if state.exists():
+        repository = Repository(str(state))
+        try:
+            load_cached_policy(config, repository)
+        finally:
+            repository.close()
     validate_config(config)
     directory = Path(args.directory)
     directory.mkdir(parents=True, exist_ok=True)

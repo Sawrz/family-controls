@@ -1,7 +1,0 @@
-#!/usr/bin/env python3
-"""Compatibility executable; implementation lives in the family_controls package."""
-
-from family_controls.bootstrap import agent_main
-
-if __name__ == "__main__":
-    agent_main()

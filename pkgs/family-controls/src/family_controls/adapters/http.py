@@ -1,14 +1,12 @@
 """Bounded HTTP transports, TLS authentication, and Unix peer authorization."""
 
 import grp
-import hmac
 import http.client
 import http.server
 import json
 import logging
 import os
 import pwd
-import re
 import socket
 import socketserver
 import ssl
@@ -20,7 +18,6 @@ from typing import Any
 from uuid import uuid4
 
 from ..application import Service
-from ..config import RelayConfig, secret
 from ..domain import Conflict, InvalidCommand, Unavailable
 
 MAX_BODY = 16384
@@ -87,47 +84,6 @@ class HTTPClient:
         return result
 
 
-class Gateway:
-    def __init__(self, config: RelayConfig) -> None:
-        self.config = config
-        self.clients = {
-            name: HTTPClient(child.caFile) for name, child in config.hostChildren.items()
-        }
-
-    def name(self, value: str) -> str:
-        for name in self.config.hostChildren:
-            if name.casefold() == value.casefold():
-                return name
-        raise InvalidCommand("Unknown child")
-
-    def request(
-        self, child: str, suffix: str, payload: dict | None = None, headers: dict | None = None
-    ) -> dict:
-        child = self.name(child)
-        entry = self.config.hostChildren[child]
-        host = f"[{entry.host}]" if ":" in entry.host else entry.host
-        result = self.clients[child].request(
-            f"https://{host}:{entry.port}/v1/users/{entry.user}/{suffix}",
-            method="POST" if payload is not None else "GET",
-            payload=payload,
-            headers={"Authorization": f"Bearer {secret(entry.apiTokenFile)}", **(headers or {})},
-        )
-        if suffix == "status" and not {"user", "phase", "application", "summary"} <= result.keys():
-            raise Unavailable("Agent returned an invalid status")
-        return result
-
-    def history(self, child: str) -> list[dict]:
-        return self.request(child, "history")["events"]
-
-    def status(self, child: str) -> dict:
-        return self.request(child, "status")
-
-    def command(self, child: str, action: str, payload: dict, operation: str, actor: str) -> dict:
-        return self.request(
-            child, action, payload, {"Idempotency-Key": operation, "X-Family-Actor": actor}
-        )
-
-
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "family-controls/0.2"
 
@@ -187,40 +143,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         server: Any = self.server
         service: Service = server.service
         try:
-            if server.local:
-                _, uid, _ = struct.unpack(
-                    "3i", self.connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-                )
-                try:
-                    user = pwd.getpwuid(uid).pw_name
-                except KeyError as exc:
-                    raise RemoteError("Unknown local identity", 403) from exc
-                if user not in service.config.managedUsers:
-                    raise RemoteError("Not a managed user", 403)
-                allowed = {
-                    "/v1/status": "status",
-                    "/v1/request-time": "request-time",
-                    "/v1/cancel-request": "cancel-request",
-                }
-                if self.path not in allowed:
-                    raise KeyError("Route not found")
-                action, actor = allowed[self.path], f"unix:{uid}"
-            else:
-                auth = self.headers.get("Authorization", "")
-                if not hmac.compare_digest(auth.encode(), f"Bearer {server.token}".encode()):
-                    raise RemoteError("Unauthorized", 401)
-                match = re.fullmatch(
-                    r"/v1/users/([a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63})/([a-z-]+)", self.path
-                )
-                if not match:
-                    raise KeyError("Route not found")
-                user, action = match.groups()
-                actor = self.headers.get("X-Family-Actor", "api")
+            _, uid, _ = struct.unpack(
+                "3i", self.connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+            )
+            try:
+                user = pwd.getpwuid(uid).pw_name
+            except KeyError as exc:
+                raise RemoteError("Unknown local identity", 403) from exc
+            if user not in service.config.managedUsers:
+                raise RemoteError("Not a managed user", 403)
+            allowed = {
+                "/v1/status": "status",
+                "/v1/request-time": "request-time",
+                "/v1/cancel-request": "cancel-request",
+            }
+            if self.path not in allowed:
+                raise KeyError("Route not found")
+            action, actor = allowed[self.path], f"unix:{uid}"
             service.check_user(user)
             if method == "GET" and action == "status":
                 self.send_json(service.status(user))
-            elif method == "GET" and action == "history" and not server.local:
-                self.send_json({"events": service.repository.history(user)})
             elif method == "POST" and action not in {"status", "history"}:
                 operation = self.headers.get("Idempotency-Key")
                 if not operation:
@@ -252,7 +194,6 @@ class BoundedThreads(socketserver.ThreadingMixIn):
     daemon_threads = True
     block_on_close = False
     service: Service
-    tls: ssl.SSLContext | None = None
     slots: threading.BoundedSemaphore
 
     def process_request(
@@ -276,28 +217,11 @@ class BoundedThreads(socketserver.ThreadingMixIn):
             raise TypeError("Only stream sockets are supported")
         request.settimeout(self.service.config.agent.requestTimeoutSeconds)
         try:
-            if self.tls:
-                request = self.tls.wrap_socket(request, server_side=True)
             super().process_request_thread(request, client_address)
         except (OSError, TimeoutError):
             request.close()
         finally:
             self.slots.release()
-
-
-class TCPServer(BoundedThreads, http.server.HTTPServer):
-    local = False
-
-    def __init__(
-        self, address: tuple[str, int], service: Service, token: str, tls: ssl.SSLContext
-    ) -> None:
-        if not token.strip():
-            raise ValueError("Empty agent credential")
-        self.service, self.token, self.tls = service, token, tls
-        if ":" in address[0]:
-            self.address_family = socket.AF_INET6
-        self.slots = threading.BoundedSemaphore(service.config.agent.maxConnections)
-        super().__init__(address, Handler)
 
 
 class UnixServer(BoundedThreads, socketserver.UnixStreamServer):
