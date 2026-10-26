@@ -8,39 +8,58 @@
         "rev": "95ca1e203c0750115fd4a6f17d5a245dfe6b1edd",
         "shallow": true,
         "type": "git",
-        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-nixpkgs.git"
+        "url": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-nixpkgs.git"
       },
       "original": {
         "ref": "nixos-26.05",
         "shallow": true,
         "type": "git",
-        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-nixpkgs.git"
+        "url": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-nixpkgs.git"
       }
     },
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
-        "sops-nix": "sops-nix"
+        "flake-parts": "flake-parts",
+        "matrix-nixpkgs": "matrix-nixpkgs"
       }
     },
-    "sops-nix": {
+    "flake-parts": {
       "inputs": {
-        "nixpkgs": [
+        "nixpkgs-lib": [
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1783104586,
-        "narHash": "sha256-vSLKc7m34/g5xH4dwmNZSqxc5OcHeE3qiG3EIz6bJKs=",
-        "rev": "1ebd41717762d837d5115f7108522c29cdb00fbb",
+        "lastModified": 1790898470,
+        "narHash": "sha256-zTwuwezD0w3hpga6a6P8emidzAZFyWqlNeRBlpWOOl8=",
+        "ref": "refs/heads/main",
+        "rev": "024633cd702b10285db5cb19b40ad48d2399ba60",
         "shallow": true,
         "type": "git",
-        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-sops-nix.git"
+        "url": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-flake-parts.git"
       },
       "original": {
         "shallow": true,
         "type": "git",
-        "url": "ssh://git@ssh.git.wrzalek.com/nixos/upstream-sops-nix.git"
+        "url": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-flake-parts.git"
+      }
+    },
+    "matrix-nixpkgs": {
+      "locked": {
+        "lastModified": 1792502884,
+        "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA=",
+        "ref": "nixos-unstable",
+        "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-nixpkgs.git"
+      },
+      "original": {
+        "ref": "nixos-unstable",
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@ssh.git.wrzalek.com/homelab/upstream-nixpkgs.git"
       }
     }
   },

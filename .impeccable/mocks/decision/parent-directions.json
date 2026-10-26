@@ -1,0 +1,239 @@
+{
+  "title": "Shape the parent interface",
+  "question": "Choose a direction for the design brief. These are static layout studies with synthetic household data; app controls are illustrative.",
+  "options": [
+    {
+      "id": "rhythm",
+      "kind": "assigned",
+      "label": "Household rhythm",
+      "thesis": "A calm overview with comparable time rows and a precise change preview.",
+      "palette": [
+        "#233F4D",
+        "#F5F1E9",
+        "#28726B",
+        "#B16042"
+      ],
+      "materials": [
+        "Flat flax-tinted surfaces",
+        "Aligned bands inspired by woven household textiles"
+      ],
+      "viewport": "Navigation rail, requests above child/computer rows, and a side panel previewing a selected change; matching time scales reveal its effect.",
+      "risk": "The repeated bands need clear labels to avoid looking like a usage chart.",
+      "html": ".impeccable/mocks/decision/rhythm.html",
+      "comp": ".impeccable/mocks/decision/rhythm.png",
+      "kicker": "THE ROLL",
+      "lineage": "Woven linen: steady repeated bands and quiet contrast",
+      "raised": [
+        {
+          "from": "Botanical folio",
+          "raise": "Use the same scale for current and proposed allowance so comparison is honest."
+        },
+        {
+          "from": "Convention catalog",
+          "raise": "Preserve readable identity and status as the household list grows."
+        },
+        {
+          "from": "Emigre specimen",
+          "raise": "Commit to a clear type hierarchy instead of a uniformly small interface."
+        },
+        {
+          "from": "Labanotation",
+          "raise": "State durations and expiry precisely, with a text equivalent for each bar."
+        },
+        {
+          "from": "Variable type specimen",
+          "raise": "Update the proposed result while editing, but require Apply to send it."
+        }
+      ]
+    },
+    {
+      "id": "planner",
+      "kind": "pick",
+      "label": "Today’s family plan",
+      "thesis": "Put requests and each child's next decision at the top of a familiar daily overview.",
+      "palette": [
+        "#254E3D",
+        "#FAF8EF",
+        "#DCE8D9",
+        "#96621D"
+      ],
+      "materials": [
+        "Warm clear surfaces",
+        "Quiet separators and compact day labels"
+      ],
+      "viewport": "Navigation rail, request strip, child/computer list with remaining time and actions; a clearly labeled today-only marker accompanies every exception.",
+      "risk": "Familiar and effective; this is close to where many family-control interfaces naturally land.",
+      "html": ".impeccable/mocks/decision/planner.html",
+      "comp": ".impeccable/mocks/decision/planner.png",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "The weekly family planner"
+    },
+    {
+      "id": "receipts",
+      "kind": "challenger",
+      "label": "Every change accounted for",
+      "thesis": "Give every action a lasting record of what was requested and what reached the computer.",
+      "palette": [
+        "#102743",
+        "#F7F8FC",
+        "#5B4190",
+        "#B62E3A"
+      ],
+      "materials": [
+        "Crisp flat panels",
+        "Aligned values and compact status labels"
+      ],
+      "viewport": "Top navigation, child/computer list with controls, and recent changes alongside; each receipt retains its pending, applied, failed or expired outcome.",
+      "risk": "Stronger on accountability than warmth; history must not crowd out today's controls.",
+      "html": ".impeccable/mocks/decision/receipts.html",
+      "comp": ".impeccable/mocks/decision/receipts.png",
+      "catalogId": "vernacular-ephemera-jet-age-ticket-wallet",
+      "verdict": "competitive",
+      "case": "Competitive on product clarity through durable outcomes; less immediate household identification than the assigned direction.",
+      "lineage": "Airline ticket wallets, translated into ordinary app components",
+      "hero": "https://impeccable.style/worlds/cards/vernacular-ephemera-jet-age-ticket-wallet-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/vernacular-ephemera-jet-age-ticket-wallet.webp"
+    },
+    {
+      "id": "botanical",
+      "kind": "challenger",
+      "catalogId": "editorial-sequence-montage-botanical-folio-season",
+      "label": "Botanical folio",
+      "palette": [
+        "#F8F2E4",
+        "#415A35",
+        "#6B5546"
+      ],
+      "thesis": "Compare current and proposed time on a shared scale.",
+      "risk": "Life-stage imagery is remote from a parent's immediate task.",
+      "kept": "Use identical scales in change previews.",
+      "verdict": "declined",
+      "materials": [
+        "Flat surfaces",
+        "Restrained typographic translation"
+      ],
+      "viewport": "Standard navigation and family controls, with the named comparison or hierarchy technique.",
+      "case": "Declined on household identification and product clarity.",
+      "hero": "https://impeccable.style/worlds/cards/editorial-sequence-montage-botanical-folio-season-hero.webp"
+    },
+    {
+      "id": "catalog",
+      "kind": "challenger",
+      "catalogId": "pop-culture-shelf-doujin-event-catalog",
+      "label": "Convention catalog",
+      "palette": [
+        "#EFECE3",
+        "#171717",
+        "#A83832"
+      ],
+      "thesis": "Keep many computer accounts scannable in compact rows.",
+      "risk": "A dense thumbnail system is less recognisable and less clear for family decisions.",
+      "kept": "Maintain identity and state at growing list sizes.",
+      "verdict": "declined",
+      "materials": [
+        "Flat surfaces",
+        "Restrained typographic translation"
+      ],
+      "viewport": "Standard navigation and family controls, with the named comparison or hierarchy technique.",
+      "case": "Declined on household identification and product clarity.",
+      "hero": "https://impeccable.style/worlds/cards/pop-culture-shelf-doujin-event-catalog-hero.webp"
+    },
+    {
+      "id": "bitmap",
+      "kind": "challenger",
+      "catalogId": "emigre-bitmap-specimen",
+      "label": "Bitmap specimen",
+      "palette": [
+        "#F4F2ED",
+        "#171717",
+        "#C74629"
+      ],
+      "thesis": "Separate remaining time, identity and supporting details with strong type hierarchy.",
+      "risk": "Pixel display type reduces calm familiarity and makes long German labels harder to scan.",
+      "kept": "Give each information level a decisive type role.",
+      "verdict": "declined",
+      "materials": [
+        "Flat surfaces",
+        "Restrained typographic translation"
+      ],
+      "viewport": "Standard navigation and family controls, with the named comparison or hierarchy technique.",
+      "case": "Declined on household identification and product clarity.",
+      "hero": "https://impeccable.style/worlds/cards/emigre-bitmap-specimen-hero.webp"
+    },
+    {
+      "id": "score",
+      "kind": "challenger",
+      "catalogId": "notation-diagram-systems-labanotation",
+      "label": "Movement score",
+      "palette": [
+        "#FFFFFF",
+        "#191919",
+        "#E3E4E5"
+      ],
+      "thesis": "Represent exact durations beside the controls that change them.",
+      "risk": "Specialist notation is unfamiliar and harder to read than labeled durations.",
+      "kept": "Use exact intervals and textual equivalents.",
+      "verdict": "declined",
+      "materials": [
+        "Flat surfaces",
+        "Restrained typographic translation"
+      ],
+      "viewport": "Standard navigation and family controls, with the named comparison or hierarchy technique.",
+      "case": "Declined on household identification and product clarity.",
+      "hero": "https://impeccable.style/worlds/cards/notation-diagram-systems-labanotation-hero.webp"
+    },
+    {
+      "id": "specimen",
+      "kind": "challenger",
+      "catalogId": "variable-font-specimen",
+      "label": "Variable type specimen",
+      "palette": [
+        "#FAFAF7",
+        "#141414",
+        "#5144C6"
+      ],
+      "thesis": "Make a proposed allowance update as its numeric input changes.",
+      "risk": "Type morphing distracts from both the household context and the decision.",
+      "kept": "Make previews respond immediately without sending the command.",
+      "verdict": "declined",
+      "materials": [
+        "Flat surfaces",
+        "Restrained typographic translation"
+      ],
+      "viewport": "Standard navigation and family controls, with the named comparison or hierarchy technique.",
+      "case": "Declined on household identification and product clarity.",
+      "hero": "https://impeccable.style/worlds/cards/variable-font-specimen-hero.webp"
+    }
+  ],
+  "reroll": {
+    "registers": [
+      "safer",
+      "bolder"
+    ]
+  },
+  "steer": true,
+  "canon": true,
+  "canonCard": {
+    "id": "canon",
+    "kind": "canon",
+    "label": "Familiar family dashboard",
+    "thesis": "A conventional family-control overview with child cards and quick actions.",
+    "palette": [
+      "#FFFFFF",
+      "#17263C",
+      "#2964C7"
+    ],
+    "materials": [
+      "Neutral panels",
+      "Conventional cards and badges"
+    ],
+    "viewport": "Top navigation, pending requests, then child/computer cards with status and quick controls.",
+    "risk": "Immediately recognisable, with less distinction between this and other family dashboards.",
+    "html": ".impeccable/mocks/decision/canon.html",
+    "comp": ".impeccable/mocks/decision/canon.png"
+  },
+  "buildPath": {
+    "value": "code",
+    "toggle": true
+  }
+}

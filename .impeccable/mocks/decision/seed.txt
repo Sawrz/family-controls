@@ -1,0 +1,155 @@
+DIRECTION CONCEPT SEED (key: 8622aaba20c97a2083e3e3c0c3f45d7b; mode: operate; source: api; approved pool: c3b204a1eed6; 306/564 human-approved; rerun with --scope direction --mode operate --from 8622aaba20c97a2083e3e3c0c3f45d7b --candidate-count 7 to reproduce this roll against this catalog revision)
+ASSIGNED INDEX: 6
+  After ordering the grounded directions by resonance, build candidate
+  6 of your own grounded list; the assignment never points at a
+  challenger. The assignment is the roll, not a suggestion: your top-ranked
+  direction is what every run would ship, so the script decides which grounded
+  direction gets built. Each direction joins a durable visual system to a
+  concrete expression for the requested first surface, decided as one. It must
+  survive the current task plus navigation, quiet and dense content,
+  interaction and state, and a substantially different future surface. In an
+  attended run, present the assigned direction fully committed and offer
+  re-roll. You may add ONE card for your top-ranked grounded candidate when
+  it is not the assigned direction, kicker IMPECCABLE’S PICK, with an honest risk line
+  naming its familiarity; one pick card, never a ranked lineup, and the pick
+  never takes the lead position. When the assignment IS your top candidate,
+  there is no pick card. Re-roll yourself only
+  on named factual grounds, when the assignment cannot carry the product's
+  truth or task; taste is never grounds.
+  The assignment exists to refuse the model's ranking rut, never to outrank
+  the user or the brief. Never expose assignment metadata in user-facing labels.
+CHALLENGERS:
+  1. a botanical folio following one plant through seed, leaf, flower, fruit, and winter husk, where each plate keeps the same exact scale and ground
+     SOURCE ID: editorial-sequence-montage-botanical-folio-season
+     CREATIVE SPARK: Five cream plates align on the same stem: a tight green bud opens scarlet, swells into black fruit, then remains as a dry silver cage.
+     SYSTEM GRAMMAR:
+       - Palette/material: warm cream plate ground with hairline sepia rules, botanical greens and scarlet-to-black fruit as the only saturation, graphite gray for labels at rest
+       - Type/composition: engraved italic species names over small-caps stage labels, five fixed-scale plates banded on one shared baseline with captions ranked beneath
+       - Topology/navigation: Move by life stage, date, plant part, plate detail, and recurring fixed landmark.
+       - Controls/state: Align, overlay, compare, and annotate with dormant, emerging, flowering, fruiting, and senescent states.
+       - Responsive/motion: Use registered overlays or a stage strip and provide descriptive change summaries.
+     WEB LEVERAGE: Image registration can make subtle seasonal transformation directly comparable without automatic morphing.
+     QUALITY BAR: board https://impeccable.style/worlds/cards/editorial-sequence-montage-botanical-folio-season.webp · hero https://impeccable.style/worlds/cards/editorial-sequence-montage-botanical-folio-season-hero.webp
+  2. a convention circle catalog printed on newsprint, thousands of hand-drawn thumbnail squares packed into a numbered hall grid, each square carrying a circle name, a table code and a drawing done at postage-stamp size
+     SOURCE ID: pop-culture-shelf-doujin-event-catalog
+     CREATIVE SPARK: eight hundred drawings on one page, each one the size of a stamp, each with a table code, and somebody has gone through and circled forty of them in biro with a route planned between them.
+     SYSTEM GRAMMAR:
+       - Palette/material: single-ink black on cheap newsprint that grays under the thumb, with one spot color used only on the hall map dividers
+       - Type/composition: postage-stamp thumbnails packed edge to edge in a numbered grid, circle names set tiny beneath, and a folded hall map keyed to the codes
+       - Topology/navigation: the hall map and the grid are the same space, so navigation moves between a table code and its physical position
+       - Controls/state: controls are thumbnail cells, the active one is circled in pen, and visited ones are struck through by hand
+       - Responsive/motion: the grid repacks in whole cells, and motion is a jump from a catalog cell to its position on the hall map
+     WEB LEVERAGE: a whole-cell responsive thumbnail grid, marked state persisted local, and deep-linking between catalog cell and hall map
+     QUALITY BAR: board https://impeccable.style/worlds/cards/pop-culture-shelf-doujin-event-catalog.webp · hero https://impeccable.style/worlds/cards/pop-culture-shelf-doujin-event-catalog-hero.webp
+  3. an Emigre bitmap type specimen, where coarse pixel letterforms are set proudly at poster scale and the low resolution is the aesthetic
+     SOURCE ID: emigre-bitmap-specimen
+     CREATIVE SPARK: A headline built from visible pixels towers over dense justified columns; the same face repeats at five sizes, and at the smallest the pixels dissolve into smooth gray text.
+     SYSTEM GRAMMAR:
+       - Palette/material: newsprint white and rich black with one synthetic accent; halftone and dot-matrix textures as legitimate surfaces
+       - Type/composition: coarse bitmap display faces against fine text grotesks; specimen-style repetition of one form at many sizes
+       - Topology/navigation: Move by typeface, by size step, and by issue spread.
+       - Controls/state: Scale, compare, and toggle bitmap versus smooth rendering as an honest state.
+       - Responsive/motion: Pixel letterforms scale only in whole-pixel multiples; nothing antialiases unless the reader asks.
+     WEB LEVERAGE: Pixel-honest display type via image-rendering rules and font sizes locked to integer multiples
+     QUALITY BAR: board https://impeccable.style/worlds/cards/emigre-bitmap-specimen.webp · hero https://impeccable.style/worlds/cards/emigre-bitmap-specimen-hero.webp
+  4. a jet-age airline ticket wallet, where carbon-copy coupons, route maps, and baggage tags choreograph one journey through crisp official color
+     SOURCE ID: vernacular-ephemera-jet-age-ticket-wallet
+     CREATIVE SPARK: Red carbon numerals, a fold-out route arc, a stapled baggage stub: the whole Atlantic crossing fits in a paper wallet.
+     SYSTEM GRAMMAR:
+       - Palette/material: carrier navy and red over crisp white coupon stock, carbon purple for every filled figure, the red VOID stamp owning the cancelled state
+       - Type/composition: airline grotesk caps on tabbed coupon heads, fare and flight boxes ruled in hairlines, carbon numerals striking fixed fields, one leg per sheet
+       - Topology/navigation: the flow is a coupon book; each leg tears off in sequence and the wallet always shows what remains.
+       - Controls/state: validated, used, and void states stamp themselves onto the coupon; nothing disappears, it cancels.
+       - Responsive/motion: coupons stack into a single stub column on phones; tear-off animates once
+     WEB LEVERAGE: Printable, deep-linkable coupon states with URL-addressable legs and offline-capable stubs.
+     QUALITY BAR: board https://impeccable.style/worlds/cards/vernacular-ephemera-jet-age-ticket-wallet.webp · hero https://impeccable.style/worlds/cards/vernacular-ephemera-jet-age-ticket-wallet-hero.webp
+  5. a labanotation dance score, a vertical center staff read upward where symbol shape is direction, shading is level, and length is exact duration
+     SOURCE ID: notation-diagram-systems-labanotation
+     CREATIVE SPARK: In a mirrored studio a notator watches the leap twice, then draws a shaded rectangle whose exact height is the half-second the dancer hung in the air.
+     SYSTEM GRAMMAR:
+       - Palette/material: white score paper and black symbol blocks, level encoded as solid, hatched, or dotted fill, the beat in progress banded pale gray across the staff
+       - Type/composition: type stays marginal, small count numerals beside the staff; the vertical center staff rules the page and bilateral symmetry is the layout law
+       - Topology/navigation: columns flank a center line, left column for left limb and right for right, time flows bottom to top so the future is always above
+       - Controls/state: each action is a shaped block whose length is its duration, shading sets level, simultaneous acts sit side by side across the columns
+       - Responsive/motion: columns thin but never merge, symmetry across the centerline is the invariant; motion rises like a slow elevator
+     WEB LEVERAGE: CSS grid columns mirror the body's bilateral layout, and scroll timelines run time upward through the score.
+     QUALITY BAR: board https://impeccable.style/worlds/cards/notation-diagram-systems-labanotation.webp · hero https://impeccable.style/worlds/cards/notation-diagram-systems-labanotation-hero.webp
+  6. an interactive type specimen, where dragging an axis slider morphs a whole grid of glyphs in real time
+     SOURCE ID: variable-font-specimen
+     CREATIVE SPARK: A single giant letter fills the screen. You drag the weight slider and it thickens from hairline to black under your finger, live. Below, a grid of every glyph breathes in step, and a monospace readout counts the axis values.
+     SYSTEM GRAMMAR:
+       - Palette/material: Near-white paper and ink black with one foundry accent; flat surfaces, generous negative space, no ornament so the letterforms carry everything.
+       - Type/composition: The specimen face at enormous display size against tiny monospace UI labels; a strict measure and baseline grid; hierarchy by scale contrast alone.
+       - Topology/navigation: Move by axis slider, by glyph cell, and by size and specimen view.
+       - Controls/state: Drag, type, and pin; moving an axis remaps every glyph on the page continuously and updates the live coordinate readout.
+       - Responsive/motion: reduced-motion snaps between named instances instead of animating the interpolation.
+     WEB LEVERAGE: Bind range inputs to CSS font-variation-settings through a custom property, so one slider drives font-variation across the entire glyph grid with no per-glyph JavaScript.
+     QUALITY BAR: board https://impeccable.style/worlds/cards/variable-font-specimen.webp · hero https://impeccable.style/worlds/cards/variable-font-specimen-hero.webp
+Fuse each challenger before judging it: the challenger supplies the form
+  and its system grammar, the product supplies every fact, and clarity wins
+  conflicts. Weigh the fused result against the assigned direction on exactly
+  two axes, audience identification and product clarity. Losing to strong
+  grounded material is a valid outcome; beating a thin or tool-monoculture
+  list is the point. A fused challenger that wins both axes becomes the build.
+  Close the weighing with a verdict per challenger, decided before any
+  borrowing is considered: wins (beats the assigned direction on both axes),
+  competitive (holds one axis), or declined (loses both). A declined
+  challenger is not spent: name the one discipline of its system the assigned
+  direction lacks, and raise the assigned direction to match before
+  presenting it. A donation transfers ambition and system discipline, never
+  the challenger's clothes. A component treatment, such as a button's shadow
+  or a display face, is clothes, not discipline; one world owns the page.
+  Write each raise as its own named line on the presented direction, and
+  carry every verdict, kept line, and raise into the decision page payload.
+When you can view images, open the QUALITY BAR board and hero for any
+challenger you weigh seriously and for the world you build. They exist as a
+craft bar, the finish level and commitment the build is expected to reach,
+never as a mockup to copy; your surface serves this product, not that render.
+PRODUCT.md and explicit incumbent brand commitments constrain every direction.
+The seed never chooses exact colors, fonts, tokens, or a user preference, and
+it never permits the world and first surface to be selected independently.
+The CREATIVE SPARK is a complete visual system, not a theme or decorative
+reference. Translate every supplied system rule into the product: palette and
+material, type and composition, topology, controls and states, and adaptation.
+Keep the source's visible character, scale, rhythm, and interaction instead of
+reducing vivid grammar to generic nouns. Keep a literal carrier only when it
+becomes functional.
+Ambitious motion, spatial media, or interaction is welcome when it strengthens
+the product without weakening semantics, performance, or fallback behavior.
+MODE RULES (operate, from /home/sandro/Projects/family-controls/.agents/skills/impeccable/reference/mode-operate.md). They govern this surface's directions and every comp you write or judge for it, the decision comps included; where shared guidance conflicts, these win.
+DIRECTIONS
+Someone who uses tools like this one should know where everything is before they notice the world. The world lends four things and only these: type, palette, density, and one signature move. It never supplies the layout, the navigation model, or the controls. Colour is part of the world's contribution, and it does real jobs: a committed palette for the shell (a coloured rail or header, a tinted ground), state colours, data series, selection, and the signature move. A grey screen with one accent colour is the category default without the category's polish, not restraint.
+
+Read every candidate, the assigned direction, and every challenger through that limit before you fuse or judge it. A world taken from a tool or instrument the audience operates (a terminal, a scope, a control panel, a cockpit) or from a fictional interface comes back as a costume of that tool on a working screen: take from it only what transfers as type, palette, density, and a signature move, or replace it from your list. When a catalog world's source is itself an interface language, the same limit holds: it lends type, density, palette, and one signature move, while navigation and controls stay the standard ones for the platform, web components on the web and native controls in an app.
+
+Write each direction's first viewport as the product's shell first: the navigation, the work areas and what each is for, the data the visitor reads first and its states, and then where the signature move lives. Expression may never obscure the task, state, or familiar affordance. Name the signature move concretely, so the comp and the build can find it: service health drawn as a transit map, a schedule set in a timetable's column rhythm. A direction whose world shows up only as a colour scheme has not found its move yet. When you weigh fused challengers, product clarity includes reading as a working product of this category.
+COMPS
+The comp is the product screen, in the direction's committed palette: its shell and navigation with a distinct area for each job and, where there is data, filters over what they scope and charts and tables with clear states. The world enters only through type, palette, density, and the one signature move; it never supplies the page's organisation, so a working screen never reads as a newspaper, a poster, or any other artifact of the world. Every control is a standard one the visitor already knows how to use, a web component on the web and the platform's native control in an app: buttons, tabs, inputs, selects, filters, tables with sortable headers, navigation that reads as navigation. Never a costume of the world's own interface: a terminal's function-key bar or command prompt, an instrument's bezel, ruled ledger paper standing in for a table. A comp an engineer could not build from the platform's standard components is a picture of the tool, not the tool. The finish bar is the best product in the category: an aligned grid, consistent spacing, a real type scale, and clear hierarchy. The signature move adds to a screen that is already that clean; it never stands in for it.
+
+Prompt with the screen's real content: the product name, realistic data with plausible values and units, real labels, and one state worth seeing (an alert, a degraded service, an empty filter result), never placeholder tiles. State colours (red for critical, amber for degraded) sit on top of the world's palette only where they carry meaning, and a headline number that moves over time shows its recent history, with the onset marked when something changed.
+
+Comps two and three vary the product's organisation, never its world coverage: the navigation model (side rail, top bar, command-first), how the work areas divide the screen, which data leads, the density, and where the signature move sits. Each must be recognisably different from the first at thumbnail size; a variant only its prompt can tell apart adds no choice. A variant that adds world material, texture, or ornament goes further in the wrong direction; on a working screen, more world is a costume.
+
+Self-check every render: with the name covered, does it read as a product of its category, could the visitor do the task from it, and is it at least as clean as the category standard and more distinctive than it? If it reads as an artifact of the world first, regenerate with the shell and the work areas named region by region and the world held to its four contributions.
+TELEMETRY: once the round resolves, rerun this script once with
+  --from 8622aaba20c97a2083e3e3c0c3f45d7b --scope direction --mode operate plus what the user did:
+  - chose a card: --kind <assigned|pick|challenger|grounded|canon>, the kind the
+    card declares, adding --chosen <SOURCE ID> when a dealt challenger won (its
+    catalogId, never your card's id) and keeping --register <safer|bolder>
+    when the round came from a steered hand;
+  - asked for another hand instead of choosing: --kind reroll, adding
+    --register <safer|bolder> when they steered it.
+  One ping per attended round the user resolved; when the decision page
+  already sent it, the rerun prints `choice already recorded`. The ping is anonymous, the card kind plus the catalog id when one
+  won; your grounded candidates' names never leave the machine, and the ping
+  is skipped automatically when DO_NOT_TRACK or IMPECCABLE_NO_TELEMETRY is set.
+A user- or brief-pinned decision beats the roll, always.
+ASSIGNED INDEX (restated for truncated readers): 6. Build candidate
+6 of your own grounded list; seed key 8622aaba20c97a2083e3e3c0c3f45d7b.
+SEED REFERENCE: seed:b1b4e4d4bf79a3b9. Write this, never the key, wherever the seed is recorded (the surface brief's FORM line, build-phase start --direction); on this machine --from accepts it in place of the key.
+PRESENTATION (the decision round, condensed from new-work.md; follow it even when your read of that file came back cut):
+- Present this hand on the decision page: write the options payload (`.agents/skills/impeccable/scripts/impeccable serve-question --schema` prints its shape), run `.agents/skills/impeccable/scripts/impeccable serve-question --start --payload <file>`, and open the URL it prints for the user.
+- Code-led round: every card but the declined challengers carries an HTML sketch: one self-contained file of the first viewport only (1440 x 900 for a desktop surface; a phone or native surface sketches the device's first screen and declares it as htmlFrame, e.g. "390x844"; fixed height, overflow hidden) at .impeccable/mocks/decision/<card id>.html, declared as the card's html, with real content from the product, inline CSS, no JavaScript, nothing fetched but Google Fonts, under 200 lines. Serve first, then write the sketches, in parallel subagents where your harness has them; the page draws each as a skeleton as it lands. With image generation, every card still declares a comp path under .impeccable/mocks/decision/ as a flip reserve, canon included, declined challengers excepted. Generate those comps only when --wait prints BUILD PATH FLIPPED, in reading order, each with its prompt sidecar (a.png gets a.png.json).
+- After the last sketch lands, hold `.agents/skills/impeccable/scripts/impeccable serve-question --wait --key <key>`. If your shell hands back a session before --wait exits, keep polling that session until it exits; rerun --wait only after it exits 3 with no answer.
+- Build path: code-led. A surface in operate mode builds in code whatever the project records (the recorded default comp from .impeccable/config.json governs Persuade and Experience surfaces). With image generation, put "buildPath": {"value": "code", "toggle": true} in the payload, so the user can still flip this one round to comp; without it there is no toggle. Never ask the user about the build path, and never offer to record a flip made on this surface.
+- The structured question tool is the fallback, never the first channel: take it when --start exits 2, when --wait exits 4 after the page closed unanswered, or when your harness cannot hold a blocking --wait at all (say so in your first reply). It carries the same options and asks nothing about the build path.
