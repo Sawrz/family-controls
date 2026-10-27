@@ -23,7 +23,7 @@ def provider(central, monkeypatch, tmp_path):
         issuer="https://issuer.test", clientId="family", clientSecretFile=str(secret)
     )
     central.config.authentication.oidc.registration = True
-    settings = {"nonce": "", "overrides": {}}
+    settings = {"nonce": "", "overrides": {}, "metadata": {}, "userinfo": {}}
 
     def transport(request):
         if request.url.path.endswith("openid-configuration"):
@@ -34,10 +34,14 @@ def provider(central, monkeypatch, tmp_path):
                     "authorization_endpoint": "https://issuer.test/authorize",
                     "token_endpoint": "https://issuer.test/token",
                     "jwks_uri": "https://issuer.test/keys",
+                    **settings["metadata"],
                 },
             )
         if request.url.path == "/keys":
             return httpx.Response(200, json={"keys": [public]})
+        if request.url.path == "/userinfo":
+            assert request.headers["Authorization"] == "Bearer test-access-token"
+            return httpx.Response(200, json=settings["userinfo"])
         assert request.url.path == "/token"
         assert "code_verifier" in parse_qs(request.content.decode())
         claims = {
@@ -52,7 +56,8 @@ def provider(central, monkeypatch, tmp_path):
         return httpx.Response(
             200,
             json={
-                "id_token": jwt.encode(claims, key, algorithm="RS256", headers={"kid": "test-key"})
+                "id_token": jwt.encode(claims, key, algorithm="RS256", headers={"kid": "test-key"}),
+                "access_token": "test-access-token",
             },
         )
 
@@ -75,27 +80,28 @@ def provider(central, monkeypatch, tmp_path):
 
 
 def test_oidc_registration_approval_login_and_replay(central, provider):
-    _, start = provider
+    settings, start = provider
+    settings["overrides"] = {"name": "  Alex   Müller ", "preferred_username": "alex"}
     state = start()
     result = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test")
     assert result.status_code == 200 and result.json()["status"] == "pending"
     username = result.json()["username"]
+    assert result.json()["displayName"] == "Alex Müller"
     assert (
         central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test").status_code
         == 401
     )
     central.client.post(f"/api/v1/accounts/{username}/approve", json={"role": "parent"})
     central.config.authentication.oidc.registration = False
+    settings["overrides"] = {"name": "Alex Schmidt"}
     state = start()
     result = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test")
     assert result.status_code == 200 and "token" in result.json()
     token = result.json()["token"]
-    assert (
-        central.client.get("/api/v1/me", headers={"Authorization": "Bearer " + token}).json()[
-            "username"
-        ]
-        == username
-    )
+    me = central.client.get("/api/v1/me", headers={"Authorization": "Bearer " + token}).json()
+    assert me["username"] == username and me["displayName"] == "Alex Schmidt"
+    assert me["role"] == "parent" and me["status"] == "approved"
+    assert len(central.store.items("accounts")) == 2
 
 
 @pytest.mark.parametrize(
@@ -138,7 +144,8 @@ def test_oidc_browser_binding_and_independent_login_switch(central, provider):
 
 
 def test_explicit_oidc_link_uses_existing_account_with_registration_disabled(central, provider):
-    _, start = provider
+    settings, start = provider
+    settings["overrides"] = {"name": "Household owner"}
     central.config.authentication.oidc.registration = False
     assert (
         central.client.post(
@@ -151,6 +158,72 @@ def test_explicit_oidc_link_uses_existing_account_with_registration_disabled(cen
     result = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test")
     assert "token" in result.json()
     assert central.accounts.authenticate(result.json()["token"])["username"] == "admin"
+    assert central.accounts.authenticate(result.json()["token"])["displayName"] == "Household owner"
+    assert len(central.store.items("accounts")) == 1
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected"),
+    [
+        ({"preferred_username": "alex"}, "alex"),
+        ({"name": ["invalid"], "preferred_username": "alex"}, "alex"),
+        ({"name": "\u202eevil", "preferred_username": "alex"}, "alex"),
+        ({"name": "x" * 257, "preferred_username": "alex"}, "alex"),
+        ({"name": "  ", "preferred_username": None}, None),
+    ],
+)
+def test_optional_profile_claims_fall_back_without_breaking_login(
+    central, provider, claims, expected
+):
+    settings, start = provider
+    settings["overrides"] = claims
+    state = start()
+    result = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test")
+    assert result.status_code == 200
+    account = result.json()
+    assert account["displayName"] == (expected or account["username"])
+
+
+def test_missing_profile_preserves_name_and_duplicate_names_do_not_merge_accounts(
+    central, provider
+):
+    settings, start = provider
+    settings["overrides"] = {"name": "Same name"}
+    state = start()
+    first = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test").json()
+    settings["overrides"] = {}
+    state = start()
+    repeated = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test").json()
+    assert repeated == first
+    settings["overrides"] = {"sub": "another-parent", "name": "Same name"}
+    state = start()
+    second = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test").json()
+    assert second["username"] != first["username"]
+    assert second["displayName"] == first["displayName"]
+    assert second["status"] == "pending"
+
+
+@pytest.mark.parametrize("subject", ["parent-subject", "different-person", None])
+def test_userinfo_names_require_the_verified_token_subject(central, provider, subject):
+    settings, start = provider
+    settings["metadata"] = {"userinfo_endpoint": "https://issuer.test/userinfo"}
+    settings["userinfo"] = {"sub": subject, "name": "Alex Müller"}
+    state = start()
+    result = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test")
+    if subject == "parent-subject":
+        assert result.status_code == 200
+        assert result.json()["displayName"] == "Alex Müller"
+    else:
+        assert result.status_code == 401
+        assert len(central.store.items("accounts")) == 1
+
+
+def test_userinfo_never_sends_tokens_over_http(central, provider):
+    settings, start = provider
+    settings["metadata"] = {"userinfo_endpoint": "http://issuer.test/userinfo"}
+    state = start()
+    result = central.client.get(f"/api/v1/auth/oidc/test/callback?state={state}&code=test")
+    assert result.status_code == 401
     assert len(central.store.items("accounts")) == 1
 
 

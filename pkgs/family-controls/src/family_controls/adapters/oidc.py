@@ -4,16 +4,36 @@ import base64
 import hashlib
 import secrets
 from datetime import timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import jwt
+from pydantic import BaseModel, field_validator
 
 from ..backend.accounts import Accounts, Forbidden, Unauthorized, digest
 from ..backend.models import BackendConfig, OIDCProvider
 from ..backend.ports import Store
 from ..config import secret
 from ..ports import Clock
+
+
+class Profile(BaseModel):
+    """Optional OIDC presentation claims; never used to identify or authorize users."""
+
+    name: str | None = None
+    preferred_username: str | None = None
+
+    @field_validator("name", "preferred_username", mode="before")
+    @classmethod
+    def readable_name(cls, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        value = " ".join(value.split())
+        return value if value.isprintable() and 0 < len(value) <= 256 else None
+
+    @property
+    def display_name(self) -> str | None:
+        return self.name or self.preferred_username
 
 
 class OIDC:
@@ -105,7 +125,8 @@ class OIDC:
                     auth=httpx.BasicAuth(provider.clientId, secret(provider.clientSecretFile)),
                 )
                 response.raise_for_status()
-                token = response.json()["id_token"]
+                tokens = response.json()
+                token = tokens["id_token"]
                 keys_response = client.get(metadata["jwks_uri"])
                 keys_response.raise_for_status()
                 header = jwt.get_unverified_header(token)
@@ -137,6 +158,28 @@ class OIDC:
                     and "azp" not in claims
                 ):
                     raise Unauthorized("OIDC token requires an authorized party")
+                profile = Profile.model_validate(claims)
+                endpoint = metadata.get("userinfo_endpoint")
+                access_token = tokens.get("access_token")
+                if not profile.display_name and endpoint and access_token:
+                    if not isinstance(endpoint, str) or not isinstance(access_token, str):
+                        raise Unauthorized("Invalid OIDC UserInfo endpoint or access token")
+                    url = urlsplit(endpoint)
+                    if url.scheme != "https" or not url.hostname or url.username or url.password:
+                        raise Unauthorized("OIDC UserInfo requires HTTPS without credentials")
+                    response = client.get(
+                        endpoint, headers={"Authorization": "Bearer " + access_token}
+                    )
+                    response.raise_for_status()
+                    info = response.json()
+                    if not isinstance(info, dict) or info.get("sub") != claims["sub"]:
+                        raise Unauthorized("OIDC UserInfo subject mismatch")
+                    profile = Profile.model_validate(info)
         except (httpx.HTTPError, jwt.PyJWTError, KeyError, ValueError) as exc:
             raise Unauthorized("OIDC exchange or token validation failed") from exc
-        return self.accounts.oidc_account(provider.issuer, claims["sub"], saved["invitation"])
+        return self.accounts.oidc_account(
+            provider.issuer,
+            claims["sub"],
+            saved["invitation"],
+            display_name=profile.display_name,
+        )

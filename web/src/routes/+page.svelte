@@ -5,10 +5,15 @@
   import CommandEditor from '#lib/components/CommandEditor.svelte';
   import PolicyEditor from '#lib/components/PolicyEditor.svelte';
   import Admin from '#lib/components/Admin.svelte';
+  import MyAccount from '#lib/components/MyAccount.svelte';
+  import ChildSetup from '#lib/components/ChildSetup.svelte';
   import UsageReport from '#lib/components/UsageReport.svelte';
   import { Api, ApiError, errorKey, recalled, remember, type Intent } from '#lib/api.ts';
   import {
     receipt,
+    languagePreferences,
+    childName,
+    account,
     assignmentLabel,
     type Account,
     type WebConfig,
@@ -19,8 +24,16 @@
   } from '#lib/contracts.ts';
   import { translate, actionLabel, dateTime, type Language, type Message } from '#lib/i18n.ts';
 
-  type View = 'today' | 'requests' | 'schedules' | 'history' | 'usage' | 'settings';
-  const views: View[] = ['today', 'requests', 'schedules', 'usage', 'history', 'settings'];
+  type View = 'today' | 'requests' | 'schedules' | 'history' | 'usage' | 'myAccount' | 'household';
+  const views: View[] = [
+    'today',
+    'requests',
+    'schedules',
+    'usage',
+    'history',
+    'myAccount',
+    'household',
+  ];
   const api = new Api();
   let language = $state<Language>('en'),
     config = $state<WebConfig | null>(null),
@@ -61,7 +74,9 @@
     children.filter(
       (c) =>
         (!computer || c.policy.assignments.some((a) => a.device === computer)) &&
-        `${c.id} ${assignmentLabel(c)}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+        `${childName(c)} ${c.id} ${assignmentLabel(c)}`
+          .toLocaleLowerCase()
+          .includes(search.toLocaleLowerCase()),
     ),
   );
   function stopLive() {
@@ -86,9 +101,16 @@
     const current = generation;
     try {
       const result = await api.children();
+      const latestUser = await api.me();
+      const latestLanguage =
+        latestUser.language ??
+        (await api.request('/api/v1/preferences', languagePreferences)).defaultLanguage;
       const latestEvents = view === 'history' ? await api.history(result) : null;
       if (generation !== current || stopped) return;
       children = result;
+      user = latestUser;
+      language = latestLanguage;
+      document.documentElement.lang = language;
       usageRefresh++;
       transportDown = false;
       if (latestEvents) events = latestEvents;
@@ -115,6 +137,11 @@
   }
   async function login() {
     user = await api.me();
+    language =
+      user.language ??
+      (await api.request('/api/v1/preferences', languagePreferences)).defaultLanguage;
+    document.documentElement.lang = language;
+    if (view === 'household' && user.role !== 'admin') view = 'myAccount';
     generation++;
     error = null;
     notice = null;
@@ -154,13 +181,32 @@
       busy = false;
     }
   }
-  function setLanguage() {
+  async function setLanguage() {
     document.documentElement.lang = language;
     try {
       localStorage.setItem('family.language', language);
     } catch {
       /* Preference remains usable without storage. */
     }
+    if (user) {
+      try {
+        user = await api.request('/api/v1/me/profile', account, 'PUT', { language });
+      } catch (e) {
+        error = errorKey(e);
+      }
+    }
+  }
+  async function accountChanged(updated: Account) {
+    user = updated;
+    language =
+      updated.language ??
+      (await api.request('/api/v1/preferences', languagePreferences)).defaultLanguage;
+    document.documentElement.lang = language;
+  }
+  async function householdChanged() {
+    user = await api.me();
+    if (user.role !== 'admin') view = 'myAccount';
+    await refresh();
   }
   async function navigate(next: View) {
     view = next;
@@ -235,6 +281,7 @@
     });
   }
   function statusLabel(child: Child): Message {
+    if (!child.policy.setupComplete) return 'needsSetup';
     if (transportDown || child.status.connectivity !== 'online') return 'offline';
     if (child.status.blocked) return 'blocked';
     if (child.status.insideUnmeteredWindow) return 'homeworkNow';
@@ -310,7 +357,7 @@
       <a class="brand" href="/">Family Controls</a>
       <p class="rail-subtitle">{t('welcome')}</p>
       <nav aria-label="Family Controls">
-        {#each views as item}<button
+        {#each views.filter((item) => item !== 'household' || user?.role === 'admin') as item}<button
             class:active={view === item}
             aria-current={view === item ? 'page' : undefined}
             onclick={() => navigate(item)}
@@ -320,7 +367,7 @@
           >{/each}
       </nav>
       <div class="rail-footer">
-        <strong>{user.username}</strong><span>{t(user.role)}</span><label
+        <strong>{user.displayName}</strong><span>{t(user.role)}</span><label
           >{t('language')}<select
             aria-label={t('language')}
             bind:value={language}
@@ -397,15 +444,17 @@
               <article class="child-row">
                 <div class="person">
                   <span class="avatar" aria-hidden="true"
-                    >{child.id.slice(0, 1).toLocaleUpperCase()}</span
+                    >{childName(child).slice(0, 1).toLocaleUpperCase()}</span
                   >
                   <div>
-                    <h3>{child.id}</h3>
+                    <h3>{childName(child)}</h3>
                     <p class="help">{assignmentLabel(child)}</p>
                   </div>
                   <span class="status-label">{t(statusLabel(child))}</span>
                 </div>
-                {#if view === 'requests'}<blockquote>
+                {#if !child.policy.setupComplete}<p class="help">{t('setupRequiredHint')}</p>
+                  <button class="primary" onclick={() => select(child)}>{t('setupChild')}</button>
+                {:else if view === 'requests'}<blockquote>
                     {child.status.pendingRequest?.reason}
                   </blockquote>
                   <p class="help">
@@ -495,15 +544,20 @@
           {#if selected}{#key `${selected.id}:${requestMode}:${requestMode ? selected.status.pendingRequest?.id : ''}`}<div
                 class="editor-slot"
               >
-                <CommandEditor
-                  child={selected}
-                  {language}
-                  request={requestMode}
-                  {busy}
-                  locked={uncertain !== null || transportDown}
-                  onsend={send}
-                  onclose={() => (selectedId = '')}
-                />
+                {#if !selected.policy.setupComplete}<ChildSetup
+                    child={selected}
+                    {children}
+                    {language}
+                    onchanged={refresh}
+                  />{:else}<CommandEditor
+                    child={selected}
+                    {language}
+                    request={requestMode}
+                    {busy}
+                    locked={uncertain !== null || transportDown}
+                    onsend={send}
+                    onclose={() => (selectedId = '')}
+                  />{/if}
               </div>{/key}{/if}
         </div>
       {:else if view === 'usage'}
@@ -512,20 +566,25 @@
         <label class="short-field"
           >{t('account')}<select aria-label={t('account')} bind:value={selectedId}
             ><option value="">—</option>{#each children as child}<option value={child.id}
-                >{child.id} · {assignmentLabel(child)}</option
+                >{childName(child)} · {assignmentLabel(child)}</option
               >{/each}</select
           ></label
         >
-        {#if selected}{#key selected.id}<PolicyEditor
-              child={selected}
-              {language}
-              onchanged={refresh}
-            />{/key}{/if}
+        {#if selected}{#key selected.id}{#if !selected.policy.setupComplete}<ChildSetup
+                child={selected}
+                {children}
+                {language}
+                onchanged={refresh}
+              />{:else}<PolicyEditor
+                child={selected}
+                {language}
+                onchanged={refresh}
+              />{/if}{/key}{/if}
       {:else if view === 'history'}
         <label class="short-field"
           >{t('account')}<select aria-label={t('account')} bind:value={selectedId}
             ><option value="">{t('children')}</option>{#each children as child}<option
-                value={child.id}>{child.id} · {assignmentLabel(child)}</option
+                value={child.id}>{childName(child)} · {assignmentLabel(child)}</option
               >{/each}</select
           ></label
         >
@@ -533,7 +592,14 @@
           {#each events.filter((e) => !selectedId || e.child === selectedId) as event (event.details.operationId)}<li
             >
               <div>
-                <h2>{event.child} · {actionLabel(language, event.action)}</h2>
+                <h2>
+                  {children.find((c) => c.id === event.child)
+                    ? childName(children.find((c) => c.id === event.child)!)
+                    : event.child.charAt(0).toLocaleUpperCase() + event.child.slice(1)} · {actionLabel(
+                    language,
+                    event.action,
+                  )}
+                </h2>
                 <p class="help">
                   {dateTime(language, event.at)} · {t('actor')}: {event.details.actor}
                 </p>
@@ -551,20 +617,10 @@
               >
             </li>{:else}<li class="empty">{t('noHistory')}</li>{/each}
         </ul>
+      {:else if view === 'household' && user.role === 'admin'}
+        <Admin {children} {language} current={user.username} onchanged={householdChanged} />
       {:else}
-        <section>
-          <h2>{t('preferences')}</h2>
-          <label class="short-field"
-            >{t('language')}<select
-              aria-label={t('language')}
-              bind:value={language}
-              onchange={setLanguage}
-              ><option value="en">English</option><option value="de">Deutsch</option></select
-            ></label
-          >
-          <p class="help">{t('deviceHint')}</p>
-        </section>
-        {#if user.role === 'admin'}<Admin {children} {language} current={user.username} />{/if}
+        <MyAccount {user} {language} onchanged={accountChanged} />
       {/if}
     </main>
   </div>

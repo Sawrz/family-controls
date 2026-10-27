@@ -217,7 +217,7 @@ in
         api("/api/v1/identities", {"interface": "matrix", "externalId": "@parent:test", "account": "admin"})
         backend.succeed("cp /var/lib/family-controls-backend/server.crt /tmp/backend-ca.crt; chmod 644 /tmp/backend-ca.crt")
         backend.fail("curl --fail --silent --unix-socket /run/family-controls-backend/adapters.sock http://localhost/api/v1/children")
-        backend.succeed("runuser -u family-controls-telegram -- env PYTHONPATH=${../pkgs/family-controls/src} python3 -m pytest -q -p no:cacheprovider ${./relay_vm.py}")
+        backend.succeed("runuser -u family-controls-telegram -- env PYTHONPATH=${../pkgs/family-controls/src} python3 -m pytest -q -p no:cacheprovider ${./relay_vm.py} -k interfaces_use")
         wait_budget(72)
         command("restore-today")
         wait_budget(60)
@@ -243,6 +243,7 @@ in
         machine.fail("runuser -u child -- rm /run/family-controls/control.sock")
         backend.wait_until_succeeds(base + " remote-status sibling | python3 -c \"import json,sys; assert json.load(sys.stdin)['pendingRequest']\"", timeout=30)
         assert status()["pendingRequest"] is None
+        backend.succeed("runuser -u family-controls-telegram -- env PYTHONPATH=${../pkgs/family-controls/src} python3 -m pytest -q -p no:cacheprovider ${./relay_vm.py} -k pending_request")
 
     with subtest("real locked-session accounting and activity enforcement"):
         sessions = machine.succeed("loginctl show-user child --property=Sessions --value").split()

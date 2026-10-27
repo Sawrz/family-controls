@@ -8,7 +8,7 @@ import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -16,15 +16,24 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
 from ..application import Command
 from ..backend.accounts import Accounts, Forbidden, Unauthorized, digest
+from ..backend.integrations import Integrations
 from ..backend.models import (
     Approval,
     ChildPolicy,
+    ChildSetup,
     DeviceReport,
     Enrollment,
     IdentityLink,
+    IntegrationReport,
     Invitation,
+    LanguageChange,
+    LanguagePreferences,
+    LinkClaim,
+    LinkConfirmation,
     Login,
     OIDCLink,
+    PasswordChange,
+    ProfileUpdate,
     Registration,
 )
 from ..backend.service import Backend
@@ -40,6 +49,7 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
     app = FastAPI(title="Family Controls", version="1.0", docs_url=None, redoc_url=None)
     attempts: dict[str, deque] = defaultdict(deque)
     config = backend.config
+    integrations = Integrations(config, accounts)
 
     @app.exception_handler(RequestValidationError)
     async def validation(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -155,6 +165,18 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
             raise Forbidden("Administrator access required")
         return identity
 
+    def personal(request: Request) -> dict:
+        identity = principal(request)
+        if identity["role"] == "interface":
+            raise Forbidden("Use your personal sign-in to manage your account")
+        return identity
+
+    def adapter(request: Request) -> dict:
+        identity = principal(request)
+        if identity["role"] != "interface":
+            raise Forbidden("Integration credentials required")
+        return identity
+
     def device(request: Request, device_id: str) -> dict:
         return backend.authenticate_device(device_id, token(request))
 
@@ -162,6 +184,9 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
     Admin = Annotated[dict, Depends(admin)]
     Reader = Annotated[dict, Depends(principal)]
     Device = Annotated[dict, Depends(device)]
+    Personal = Annotated[dict, Depends(personal)]
+    Adapter = Annotated[dict, Depends(adapter)]
+    Kind = Literal["telegram", "matrix"]
 
     def login_response(credential: str) -> JSONResponse:
         response = JSONResponse(
@@ -202,9 +227,94 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
         response.delete_cookie("family_session", path="/")
         return response
 
+    @app.get("/api/v1/preferences")
+    def preferences(identity: Reader) -> dict:
+        return integrations.preferences()
+
+    @app.put("/api/v1/preferences")
+    def save_preferences(body: LanguagePreferences, identity: Admin) -> dict:
+        return integrations.set_preferences(body, identity["username"])
+
+    @app.put("/api/v1/adapter/language")
+    def adapter_language(body: LanguageChange, identity: Adapter, actor: Parent) -> dict:
+        return integrations.language(identity["kind"], actor["username"], body)
+
+    @app.get("/api/v1/operations/{operation:path}")
+    def operation(operation: str, identity: Reader) -> dict:
+        record = backend.store.get("commands", operation)
+        if not record:
+            raise InvalidCommand("Unknown operation")
+        account = backend.store.get("accounts", record["actor"]) or {}
+        return {**record, "actorName": account.get("displayName") or record["actor"]}
+
     @app.get("/api/v1/me")
     def me(identity: Parent) -> dict:
         return accounts.public(identity)
+
+    @app.put("/api/v1/me/profile")
+    def profile(body: ProfileUpdate, identity: Personal) -> dict:
+        return accounts.profile(identity["username"], body)
+
+    @app.post("/api/v1/me/password")
+    def password(body: PasswordChange, identity: Personal, request: Request) -> dict:
+        accounts.change_password(identity["username"], body, token(request))
+        return {"status": "changed"}
+
+    @app.get("/api/v1/me/connections")
+    def personal_connections(identity: Personal) -> dict:
+        return {"integrations": integrations.overview(identity["username"])}
+
+    @app.post("/api/v1/me/connections/{kind}/challenge")
+    def begin_link(kind: Kind, identity: Personal) -> dict:
+        return integrations.begin(identity["username"], kind)
+
+    @app.delete("/api/v1/me/connections/{kind}/challenge")
+    def cancel_link(kind: Kind, identity: Personal) -> dict:
+        with backend.store.transaction():
+            backend.store.delete("link-challenges", f"{identity['username']}:{kind}")
+        return {"status": "cancelled"}
+
+    @app.post("/api/v1/me/connections/{kind}/confirm")
+    def confirm_link(kind: Kind, body: LinkConfirmation, identity: Personal) -> dict:
+        integrations.confirm(identity["username"], kind, body)
+        return {"status": "linked"}
+
+    @app.delete("/api/v1/me/connections/{kind}")
+    def disconnect(kind: Kind, external_id: str, identity: Personal) -> dict:
+        integrations.unlink(kind, external_id, identity["username"])
+        return {"status": "unlinked"}
+
+    @app.get("/api/v1/integrations")
+    def integration_overview(identity: Admin) -> dict:
+        return {"integrations": integrations.overview()}
+
+    @app.delete("/api/v1/integrations/{kind}/links")
+    def unlink(kind: Kind, external_id: str, identity: Admin) -> dict:
+        integrations.unlink(kind, external_id, identity["username"], admin=True)
+        return {"status": "unlinked"}
+
+    @app.post("/api/v1/adapter/health")
+    def integration_health(body: IntegrationReport, identity: Adapter) -> dict:
+        integrations.report(identity["kind"], body)
+        return {"status": "recorded"}
+
+    @app.post("/api/v1/adapter/link")
+    def integration_claim(body: LinkClaim, identity: Adapter) -> dict:
+        integrations.claim(identity["kind"], body)
+        return {"status": "claimed"}
+
+    @app.get("/api/v1/authentication")
+    def authentication(identity: Personal) -> dict:
+        auth = config.authentication
+        return {
+            "password": auth.password.model_dump(),
+            "oidc": auth.oidc.model_dump(),
+            "requireApproval": auth.requireApproval,
+            "providers": [
+                {"id": name, "label": p.label or name, "issuer": p.issuer}
+                for name, p in auth.providers.items()
+            ],
+        }
 
     @app.get("/api/v1/auth/oidc/{provider}/start")
     def oidc_start(provider: str, invitation: str | None = None) -> Response:
@@ -239,6 +349,10 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
     @app.post("/api/v1/accounts/{username}/approve")
     def account_approve(username: str, body: Approval, identity: Admin) -> dict:
         return accounts.approve(username, body.role, identity["username"])
+
+    @app.put("/api/v1/accounts/{username}/role")
+    def account_role(username: str, body: Approval, identity: Admin) -> dict:
+        return accounts.set_role(username, body.role, identity["username"])
 
     @app.post("/api/v1/accounts/{username}/revoke")
     def account_revoke(username: str, identity: Admin) -> dict:
@@ -284,6 +398,12 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
         child: str, body: ChildPolicy, identity: Parent, revision: Annotated[int, Query(ge=1)]
     ) -> dict:
         return backend.set_policy(child, body, revision, identity["username"])
+
+    @app.post("/api/v1/children/{child}/setup")
+    def setup_child(
+        child: str, body: ChildSetup, identity: Parent, revision: Annotated[int, Query(ge=1)]
+    ) -> dict:
+        return backend.setup_child(child, body, revision, identity["username"])
 
     @app.post("/api/v1/children/{child}/commands/{action}", status_code=202)
     def command(
@@ -337,6 +457,7 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
                 check()
             except (Unauthorized, Forbidden):
                 return
+            backend.reconcile_notifications()
             batch = backend.store.events(audience, cursor)
             for event in batch:
                 yield f"id: {event['id']}\nevent: change\ndata: {json.dumps(event)}\n\n"

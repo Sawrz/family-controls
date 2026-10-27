@@ -126,7 +126,7 @@
             };
             providers = map (name: {
               id = name;
-              label = name;
+              label = backend.settings.authentication.providers.${name}.label or name;
             }) (builtins.attrNames (backend.settings.authentication.providers or { }));
           };
           description = "Public sign-in metadata; inherited from a local backend. Match the remote backend when hosted separately.";

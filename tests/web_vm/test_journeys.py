@@ -67,11 +67,13 @@ class Household:
         return result
 
     def navigate(self, label):
-        self.page.get_by_role("navigation").get_by_role("button", name=label, exact=True).click()
+        self.page.get_by_role("navigation", name="Family Controls").get_by_role(
+            "button", name=label, exact=True
+        ).click()
 
     def row(self, user="child"):
         return self.page.locator(".child-row").filter(
-            has=self.page.get_by_role("heading", name=user, exact=True)
+            has=self.page.get_by_role("heading", name=user[:1].upper() + user[1:], exact=True)
         )
 
     def change(self, action, minutes=None):
@@ -121,6 +123,7 @@ class Household:
             raise
 
     def screenshot(self, name):
+        self.page.evaluate("window.scrollTo(0, 0)")
         self.page.screenshot(path=str(Path(os.environ["VM_ARTIFACTS"]) / name), full_page=True)
 
 
@@ -154,7 +157,10 @@ def household(vm_nodes):
 def test_declarative_enrollment_through_external_https_proxy(household):
     home, page = household, household.page
     expect(home.row().get_by_text("Unknown", exact=True)).to_be_visible()
-    home.navigate("Settings")
+    home.navigate("Household administration")
+    page.get_by_role("navigation", name="Household settings").get_by_role(
+        "button", name="Devices", exact=True
+    ).click()
     expect(page.get_by_role("heading", name="Create device enrollment token")).to_have_count(0)
     cert = home.nodes.backend.succeed("cat /var/lib/family-controls-backend/server.crt")
     for name in ("machine", "laptop"):
@@ -165,6 +171,40 @@ def test_declarative_enrollment_through_external_https_proxy(household):
         node.succeed("printf %s " + shlex.quote(cert) + " > /etc/backend-ca.crt")
         node.succeed("systemctl start family-controls-agent")
     home.budget(60)
+    assert home.read("/api/v1/children/sibling/policy")["setupComplete"] is False
+    home.nodes.machine.wait_until_succeeds(
+        "runuser -u sibling -- family-controlsctl status | python3 -c "
+        + shlex.quote(
+            "import json,sys; assert json.load(sys.stdin)['effectiveDailyLimitMinutes'] == 0"
+        )
+    )
+    home.navigate("Today")
+    home.row("sibling").get_by_role("button", name="Set up limits", exact=True).click()
+    setup = page.get_by_role("region", name="Set up limits Sibling")
+    setup.get_by_role("button", name="Child", exact=True).click()
+    home.screenshot("child-onboarding-desktop.png")
+    page.set_viewport_size({"width": 390, "height": 844})
+    home.screenshot("child-onboarding-phone.png")
+    setup.get_by_role("button", name="Confirm limits", exact=True).click()
+    expect(setup).to_have_count(0)
+    home.nodes.machine.wait_until_succeeds(
+        "runuser -u sibling -- family-controlsctl status | python3 -c "
+        + shlex.quote(
+            "import json,sys; s=json.load(sys.stdin); "
+            "assert s['effectiveDailyLimitMinutes'] == 60; "
+            "assert s['application']['status'] == 'applied'; "
+            "assert s['remainingAllowedSeconds'] > 0; "
+            "assert s['remainingPlayTimeSeconds'] > 0"
+        )
+    )
+    assert home.read("/api/v1/children/sibling/policy")["setupComplete"] is True
+    home.nodes.machine.succeed("systemctl start family-test-session-sibling")
+    home.nodes.machine.wait_for_unit("family-test-session-sibling")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    home.navigate("Household administration")
+    page.get_by_role("navigation", name="Household settings").get_by_role(
+        "button", name="Devices", exact=True
+    ).click()
     assert home.local("sibling")["effectiveDailyLimitMinutes"] == 60
     for name in ("machine", "laptop"):
         device = page.locator(".record-list li").filter(has=page.get_by_text(name, exact=True))
@@ -505,3 +545,51 @@ def test_device_rotation_and_removal_preserve_reports(household):
         ]
         == "revoked"
     )
+
+
+def test_personal_connections_and_household_overview_use_os_trusted_adapter(household):
+    home, page = household, household.page
+    home.navigate("My account")
+    page.get_by_label("Display name", exact=True).fill("Household owner")
+    page.get_by_role("button", name="Save profile", exact=True).click()
+    expect(page.locator(".rail-footer strong")).to_have_text("Household owner")
+    telegram = page.get_by_role("region", name="Telegram", exact=True)
+    telegram.get_by_role("button", name="Connect my account").click()
+    token = telegram.get_by_label("One-use linking command").input_value().split()[1]
+
+    def adapter(path, payload):
+        # Only the external provider is simulated. Authenticate as the deployed
+        # adapter OS user through the real Unix listener and central service.
+        return home.nodes.backend.succeed(
+            "runuser -u family-controls-telegram -- curl --fail --silent "
+            "--unix-socket /run/family-controls-backend/adapters.sock "
+            "-H 'Content-Type: application/json' --data "
+            + shlex.quote(json.dumps(payload))
+            + " http://localhost/api/v1/adapter/"
+            + path
+        )
+
+    adapter("link", {"token": token, "externalId": "42", "label": "@parent_vm"})
+    expect(telegram.get_by_role("button", name="Confirm this account")).to_be_visible()
+    telegram.get_by_role("button", name="Confirm this account").click()
+    expect(telegram.get_by_role("button", name="Disconnect account")).to_be_visible()
+    adapter(
+        "health", {"status": "connected", "bot": "@family_test", "destination": "VM parents (-42)"}
+    )
+    home.screenshot("personal-connections-desktop.png")
+    home.navigate("Household administration")
+    page.get_by_role("navigation", name="Household settings").get_by_role(
+        "button", name="Integrations", exact=True
+    ).click()
+    expect(telegram).to_contain_text("Household owner")
+    expect(telegram.get_by_text("Connected", exact=True)).to_be_visible()
+    home.screenshot("household-integrations-desktop.png")
+    page.set_viewport_size({"width": 390, "height": 844})
+    home.screenshot("household-integrations-phone.png")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    home.navigate("My account")
+    telegram.get_by_role("button", name="Disconnect account").click()
+    telegram.locator(".alert.warning").get_by_role("button", name="Disconnect account").click()
+    expect(telegram).to_contain_text("Your account is not linked")
+    assert home.read("/api/v1/children/sibling/policy")["setupComplete"] is True
+    page.set_viewport_size({"width": 1440, "height": 1000})

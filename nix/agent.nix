@@ -39,12 +39,12 @@
 
           playTime = {
             dailyLimitMinutes = mkOption {
-              type = types.nullOr (types.ints.between 0 1440);
-              default = null;
+              type = types.ints.between 0 1440;
+              default = 0;
             };
             activities = mkOption {
               type = types.listOf types.str;
-              default = [ ];
+              default = [ ".*" ];
             };
           };
 
@@ -83,12 +83,15 @@
           dnsProfiles = {
             restrictedProfile = mkOption {
               type = types.str;
+              default = "restricted";
             };
             homeworkProfile = mkOption {
               type = types.str;
+              default = "homework";
             };
             leisureProfile = mkOption {
               type = types.str;
+              default = "leisure";
             };
           };
 
@@ -300,10 +303,10 @@
             message = "family-controls.agent requires at least one managed user.";
           }
           {
-            assertion = builtins.all (
-              userCfg: userCfg.playTime.dailyLimitMinutes != null && userCfg.playTime.activities != [ ]
-            ) (builtins.attrValues cfg.managedUsers);
-            message = "Each managed user must set playTime.dailyLimitMinutes and at least one playTime.activities entry.";
+            assertion = builtins.all (userCfg: userCfg.playTime.activities != [ ]) (
+              builtins.attrValues cfg.managedUsers
+            );
+            message = "Each managed user needs at least one playTime.activities entry.";
           }
         ];
 

@@ -226,6 +226,10 @@ from two columns to one. No workflow disappears on phones.
 Authentication uses a two-column layout capped at (1050px), with a forest
 introduction panel. On phones it becomes one column capped at (500px).
 
+Settings use vertically separated sections and single-column forms capped at
+(36rem), with (1rem) between fields. Metadata uses a label/value grid; at (600px)
+and below, each value moves below its label. Long identities wrap within the row.
+
 ## Elevation & Depth
 
 Depth comes from background tones and (1px) rules. Panels, controls and navigation
@@ -268,6 +272,9 @@ The forest rail holds plain text buttons. The current page uses sage with forest
 text and stronger weight; hover uses rail green. Request counts are small sage
 pills. On phones, navigation wraps above the account and language controls.
 
+Settings destinations use a secondary row of wrapping bordered buttons. The
+current section uses sage with forest text and an accessible current-page state.
+
 ### Status badges and alerts
 
 Badges use the field radius, compact padding and wrapping labels. Pending states
@@ -292,12 +299,51 @@ an explicit confirmation checkbox before their primary action becomes available.
 The panel’s heading receives focus when opened, and the preview remains in the
 form flow on phones.
 
+### Settings and connections
+
+Personal and household settings share open sections divided by thin rules, with
+headings above their forms. Each messaging service has its own visible section:
+the heading sits beside a written health badge, followed by labeled metadata and
+identity rows. Linking progress and identity confirmation stay in document flow.
+Disconnect confirmation names the affected identity and pairs a danger action
+with Cancel in a warning surface.
+
+Language controls reuse labeled native selects and inline save feedback. My
+account offers English, German or household inheritance. Household administration
+places the shared default above the service sections and a group or room override
+inside each configured service. Help distinguishes personal replies from shared
+notifications; these controls retain the existing wrapping phone layout.
+
+### Initial setup
+
+Initial setup uses the existing selection sage, panel corners and padding. Its
+heading names the child and receives focus on opening. Copy controls precede the
+allowance field; copied allowed and unmetered hours remain visible before
+confirmation. Scope and timezone help sit above the primary action. Conflicts
+keep the draft visible with an inline reload action and disable confirmation
+until the conflict is resolved.
+
 ### Configuration-managed devices
 
 Device rows retain the existing record-list layout. They show the connection or
 approval state and explain that configuration controls access. Manual approval,
 revocation and invitation controls are omitted for these devices. Text wraps on
 phones; no new visual tokens or layout variants are introduced.
+
+### Parent account names
+
+Use the provider's display name in the navigation, account rows and action
+confirmations. Administration retains the stable account ID beneath the name
+and in identity-link choices so equal names can be distinguished. Name changes
+do not change the identity targeted by an action. Missing names fall back to the
+account ID; long names wrap within the existing layout.
+
+### Child display names
+
+Schedules places the editable display name before the recurring allowance fields.
+The name is shared across interfaces; a missing name falls back to the child ID
+with its first letter capitalized. Computer and account metadata remain alongside
+the name so changing it does not obscure the target of an action.
 
 ## Do's and Don'ts
 

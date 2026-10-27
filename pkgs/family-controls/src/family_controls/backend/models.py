@@ -3,9 +3,9 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
-from ..config import Identifier, Model, User
+from ..config import Identifier, Minutes, Model, User, Windows
 from ..usage import Usage
 
 Role = Literal["admin", "parent"]
@@ -21,6 +21,7 @@ class OIDCProvider(Model):
     issuer: str
     clientId: str
     clientSecretFile: str
+    label: str | None = Field(default=None, min_length=1, max_length=100)
 
     @model_validator(mode="after")
     def secure(self) -> "OIDCProvider":
@@ -74,6 +75,17 @@ class ChildPolicy(Model):
     assignments: list[Assignment] = Field(default_factory=list, max_length=32)
     timezone: str = "Europe/Berlin"
     policy: User
+    displayName: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator("displayName")
+    @classmethod
+    def readable_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.split())
+        if not value or not value.isprintable():
+            raise ValueError("Enter a readable name")
+        return value
 
     @model_validator(mode="after")
     def timezone_exists(self) -> "ChildPolicy":
@@ -83,6 +95,62 @@ class ChildPolicy(Model):
         if len({a.device for a in self.assignments}) != len(self.assignments):
             raise ValueError("A child has one OS account per assigned device")
         return self
+
+
+def restricted_policy() -> User:
+    """No access before parent setup; meter all user processes once configured."""
+    return User.model_validate({"playTime": {"dailyLimitMinutes": 0, "activities": [".*"]}})
+
+
+class ChildConfiguration(ChildPolicy):
+    policy: User = Field(default_factory=restricted_policy)
+
+
+class ChildSetup(Model):
+    dailyLimitMinutes: Minutes
+    timeWindows: Windows
+
+
+class IntegrationMetadata(Model):
+    bot: str | None = Field(default=None, max_length=256)
+    destination: str | None = Field(default=None, max_length=256)
+
+
+class IntegrationReport(IntegrationMetadata):
+    status: Literal["connected", "problem"]
+
+
+class LinkClaim(Model):
+    token: SecretStr = Field(min_length=32, max_length=128)
+    externalId: Key
+    label: str | None = Field(default=None, max_length=256)
+
+
+class LinkConfirmation(Model):
+    challengeId: Key
+    externalId: Key
+
+
+class ProfileUpdate(Model):
+    displayName: str | None = Field(default=None, min_length=1, max_length=256)
+    language: Literal["en", "de"] | None
+
+
+class LanguagePreferences(Model):
+    defaultLanguage: Literal["en", "de"] = "en"
+    chatLanguages: dict[Literal["telegram", "matrix"], Literal["en", "de"]] = Field(
+        default_factory=dict
+    )
+
+
+class LanguageChange(Model):
+    scope: Literal["me", "chat"]
+    language: Literal["en", "de"] | None
+
+
+class PasswordChange(Model):
+    currentPassword: SecretStr = Field(default=SecretStr(""), max_length=1024)
+    newPassword: SecretStr = Field(min_length=12, max_length=1024)
 
 
 class InterfaceCredential(Model):
@@ -105,7 +173,7 @@ class BackendConfig(Model):
     tlsCertFile: str | None = None
     tlsKeyFile: str | None = None
     authentication: Authentication
-    children: dict[Identifier, ChildPolicy] = Field(min_length=1)
+    children: dict[Identifier, ChildConfiguration] = Field(min_length=1)
     trustedDevices: dict[Identifier, TrustedDevice] = Field(default_factory=dict)
     interfaces: dict[Identifier, InterfaceCredential] = Field(default_factory=dict)
     staleSeconds: Annotated[int, Field(ge=10, le=300)] = 30
@@ -113,6 +181,10 @@ class BackendConfig(Model):
     adapterSocketPath: str | None = None
     adapterSocketGroup: str = "family-controls-adapters"
     localAdapters: dict[Identifier, Literal["telegram", "matrix"]] = Field(default_factory=dict)
+    language: LanguagePreferences = Field(default_factory=LanguagePreferences)
+    integrationMetadata: dict[Literal["telegram", "matrix"], IntegrationMetadata] = Field(
+        default_factory=dict
+    )
 
     @model_validator(mode="after")
     def topology(self) -> "BackendConfig":
@@ -144,8 +216,8 @@ class BackendConfig(Model):
                 if not existing:
                     assignments[child].append(Assignment(device=device, user=user))
         self.children = {
-            name: ChildPolicy.model_validate(
-                {**child.model_dump(), "assignments": assignments[name]}
+            name: ChildConfiguration.model_validate(
+                {**child.model_dump(exclude_unset=True), "assignments": assignments[name]}
             )
             for name, child in self.children.items()
         }

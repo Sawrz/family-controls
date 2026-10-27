@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { childName } from '../contracts';
   import { assignmentLabel } from '#lib/contracts.ts';
   import { untrack } from 'svelte';
   import { Api, ApiError, errorKey } from '../api';
@@ -53,7 +54,15 @@
               .filter(Boolean),
           ]),
         );
-      const { revision, ...body } = structuredClone($state.snapshot(draft));
+      const revision = draft.revision;
+      const body = structuredClone(
+        $state.snapshot({
+          assignments: draft.assignments,
+          timezone: draft.timezone,
+          displayName: draft.displayName || null,
+          policy: draft.policy,
+        }),
+      );
       body.policy.timeWindows = { allowed: windows(allowed), unmetered: windows(homework) };
       body.policy.playTime.activities = activities
         .split('\n')
@@ -77,11 +86,18 @@
 </script>
 
 <section class="policy-editor">
-  <h2>{child.id} · {assignmentLabel(child)}</h2>
+  <h2>{childName(child)} · {assignmentLabel(child)}</h2>
   <p class="help">{t('routineHint')} · {child.policy.timezone}</p>
   {#if error}<p role="alert" class="alert error">{t(conflict ? 'draftConflict' : error)}</p>{/if}
   {#if notice}<p role="status" class="alert">{t('saved')}</p>{/if}
   <form onsubmit={save}>
+    <label
+      >{t('displayName')}<input
+        bind:value={draft.displayName}
+        maxlength="100"
+        placeholder={childName(child)}
+      /></label
+    >
     <label class="short-field"
       >{t('allowance')} ({t('minutes')})<input
         type="number"

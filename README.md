@@ -44,7 +44,9 @@ Vodozemac encryption backend; insecure Olm is not enabled.
 
 The [parent web interface](docs/web-interface.md) supports phone and desktop use,
 custom time changes, request decisions, schedules, weekly usage with device
-breakdowns, history and administration.
+breakdowns, history, first-run child setup and separate personal/household
+administration. Telegram and Matrix sections show connection health and verified
+parent links. See [setup and account management](docs/account-and-household.md).
 Enable it with `services.family-controls.interfaces.web.enable`; its static
 SvelteKit package shares an HTTPS origin with the API through Nginx.
 
@@ -89,14 +91,18 @@ The API is rooted at `/api/v1`; its schema is `/openapi.json`. Parent clients us
 `Authorization: Bearer …`. Local messaging adapters authenticate through a protected Unix socket using their
 service UID. Remote adapters require an explicit backend credential and HTTPS.
 Both must supply `X-Family-Actor: telegram:USER_ID` or `matrix:@user:server` for
-interactive actions. An administrator links each sender to an approved household
-account. Interface credentials cannot approve accounts or devices.
+interactive actions. Approved parents can verify and link their own messaging
+accounts in My account; administrators can also manage household links.
+Interface credentials cannot approve accounts or devices.
 
 | Route | Purpose |
 | --- | --- |
 | `POST /auth/register`, `/auth/login`, `/auth/logout` | Password registration and sessions |
 | `GET /auth/oidc/{provider}/start` | Start browser-bound OIDC authorization with PKCE |
 | `GET /me`, `/children`, `/children/{child}/status` | Identity and device-reported status |
+| `PUT /me/profile`, `POST /me/password`, `/me/connections/*` | Personal settings and verified messaging links |
+| `POST /children/{child}/setup?revision=N` | Confirm initial limits for an unseeded child |
+| `GET /integrations`, `POST /adapter/health` | Household overview and authenticated adapter health |
 | `POST /children/{child}/commands/{action}` | Queue a parent command with `Idempotency-Key` |
 | `GET /children/{child}/usage?start=YYYY-MM-DD` | Seven-day usage totals and device breakdowns |
 | `GET /children/{child}/history` | Latest 100 commands and outcomes |
@@ -210,3 +216,5 @@ Recovery retains the locked commit/content hash and handles transport failures;
 authentication and integrity failures stop it. Run
 `python3 recovery/sources.py update-check --source .` before `nix flake update`.
 The recovery/runner helpers are shared with `nix-config` and updated together.
+
+Chat menus, languages, bulk actions and request delivery: [chat interfaces](docs/chat-interfaces.md).

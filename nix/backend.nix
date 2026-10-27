@@ -13,6 +13,34 @@
         cfg.settings
         // {
           trustedDevices = cfg.trustedDevices;
+          integrationMetadata =
+            (cfg.settings.integrationMetadata or { })
+            // lib.listToAttrs (
+              lib.concatMap
+                (
+                  name:
+                  let
+                    adapter = config.services.family-controls.interfaces.${name};
+                  in
+                  lib.optional (adapter.enable && adapter.transport == "local") {
+                    inherit name;
+                    value =
+                      if name == "telegram" then
+                        {
+                          destination = adapter.settings.parentGroupChatId or null;
+                        }
+                      else
+                        {
+                          bot = adapter.settings.userId or null;
+                          destination = adapter.settings.roomId or null;
+                        };
+                  }
+                )
+                [
+                  "telegram"
+                  "matrix"
+                ]
+            );
           adapterSocketPath = "/run/family-controls-backend/adapters.sock";
           localAdapters = lib.listToAttrs (
             lib.concatMap

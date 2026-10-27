@@ -12,7 +12,10 @@
   nodes.backend = { pkgs, ... }: {
     # All device/account assignments come from trustedDevices in this deployment.
     services.family-controls.backend.settings.children.child.assignments = lib.mkForce [ ];
-    services.family-controls.backend.settings.children.sibling.assignments = lib.mkForce [ ];
+    services.family-controls.backend.settings.children.sibling = lib.mkForce {
+      assignments = [ ];
+      timezone = "Europe/Berlin";
+    };
     services.family-controls.backend.settings.publicUrl = lib.mkForce "https://backend";
     services.family-controls.interfaces.web = {
       enable = true;
@@ -125,6 +128,12 @@
   };
 
   nodes.machine = { pkgs, ... }: {
+    # A fresh host has no access before receiving a parent-confirmed policy.
+    services.family-controls.agent.managedUsers.sibling = {
+      playTime.dailyLimitMinutes = lib.mkForce 0;
+      playTime.activities = lib.mkForce [ ".*" ];
+      timeWindows.allowed = lib.mkForce { };
+    };
     services.family-controls.agent = {
       enrollmentTokenFile = lib.mkForce null;
       credentialFile = "/etc/device-token";
@@ -185,7 +194,7 @@
     backend.forward_port(8443, 443)
     machine.wait_for_unit("timekprd")
     machine.wait_for_unit("family-test-session-child")
-    machine.wait_for_unit("family-test-session-sibling")
+    # The new sibling is restricted until the browser completes onboarding.
     laptop.wait_for_unit("timekprd")
     laptop.wait_for_unit("family-test-session-child")
 

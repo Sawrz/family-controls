@@ -343,6 +343,13 @@ legend {
   font-size: 0.85rem;
   color: #d8e4d4;
 }
+.rail-footer strong,
+.record-list strong {
+  overflow-wrap: anywhere;
+}
+.record-list li > div {
+  min-width: 0;
+}
 .rail-footer label {
   font-size: 0.8rem;
   margin: 0.8rem 0;
@@ -875,5 +882,59 @@ progress::-moz-progress-bar {
   }
   .change-preview p {
     max-width: none;
+  }
+}
+
+.settings-section {
+  padding-block: 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.settings-section h2,
+.settings-section h3 {
+  margin-top: 0;
+}
+.settings-form {
+  max-width: 36rem;
+  display: grid;
+  gap: 1rem;
+}
+.settings-form button {
+  justify-self: start;
+}
+.settings-details {
+  display: grid;
+  gap: 0.75rem;
+}
+.settings-details div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+  gap: 1rem;
+}
+.settings-details dt {
+  font-weight: 600;
+}
+.settings-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block: 1.5rem;
+}
+.section-nav .active {
+  background: var(--sage);
+  color: var(--green);
+}
+.setup-panel {
+  background: var(--sage);
+  padding: 1.5rem;
+  border-radius: var(--radius);
+}
+@media (max-width: 600px) {
+  .settings-details div {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
   }
 }

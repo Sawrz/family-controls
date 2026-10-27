@@ -8,6 +8,9 @@ Agents always use verified HTTPS. Secret storage and delivery belong to the
 installation: SOPS, agenix, a credential service, or an ordinary protected file
 all work. The flake does not read or generate secrets during evaluation/build.
 
+See [child setup and account management](account-and-household.md) for first-run
+policy confirmation and personal integrations.
+
 ## Generate a credential
 
 Run this once per device in a private directory, outside a Nix build:
@@ -44,15 +47,15 @@ requests but stores only its hash. Never share one token among different devices
     backend.url = "https://family.example.net";
     credentialFile = "/etc/family-controls/device-token";
     accounts.lilly.child = "lilly";
-    managedUsers.lilly = policy; # Existing initial policy and OS settings.
+    managedUsers.lilly = { }; # Restricted until parent setup.
   };
 }
 ```
 
 `accounts` must cover exactly the local `managedUsers`. Returned backend policies
-must match both local usernames and expected child identities. Local initial
-policies are needed to configure enforcement before the first connection;
-centrally saved policies and bounded offline allocations take over after sync.
+must match both local usernames and expected child identities. The default local
+policy restricts access before setup. Centrally saved policies and bounded
+offline allocations take over after sync.
 Before the first allocation there is no metered credit. Keep `stateDir` unchanged
 when adopting this flow so usage, cached policies and receipts remain intact.
 Do not set `enrollmentTokenFile` alongside `credentialFile`.
@@ -71,7 +74,7 @@ services.family-controls.backend = {
     # Keep the installation's existing password/OIDC bootstrap settings.
     children.lilly = {
       timezone = "Europe/Berlin";
-      inherit policy;
+      # No policy seed needed; parents confirm limits in the interface.
     };
   };
 };

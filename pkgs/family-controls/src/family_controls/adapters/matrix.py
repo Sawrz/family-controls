@@ -8,14 +8,26 @@ import importlib
 import logging
 import threading
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from ..application import ADJUSTMENTS
+from ..chat import Chat
 from ..clock import SystemClock
 from ..config import MatrixConfig, secret
 from ..domain import InvalidCommand, Unavailable, parse_duration
-from ..presentation import COMMANDS, status_text
+from ..presentation import (
+    COMMANDS,
+    LABELS,
+    child_label,
+    error_text,
+    receipt_text,
+    request_text,
+    status_text,
+    timestamp,
+    tr,
+)
 from .client import Gateway
 from .events import consume_events
 from .sqlite import Repository
@@ -39,28 +51,80 @@ class Matrix:
             client,
         )
         self.clock = SystemClock("UTC")
+        self.chat = Chat("matrix", gateway, repository, self.clock)
         self.transport_errors = transport_errors
+        self.last_health = -3600.0
+        self.delivery_lock = asyncio.Lock()
+        self.pruned_day: str | None = None
 
     def execute(self, text: str, sender: str, operation: str) -> str:
-        self.gateway.authorize("matrix:" + sender)
         parts = text.split()
         command = parts[0].removeprefix("!") if parts else "help"
-        if command in {"family", "status"}:
-            children = [parts[1]] if len(parts) > 1 else self.config.children
-            return "\n\n".join(status_text(child, self.gateway.status(child)) for child in children)
-        if len(parts) < 2:
-            return "!family · !addtime child 25m · !setremaining child 15m · !until child 19:30 · !allday child · !restore child · !approve child REQUEST_ID 15m · !deny child REQUEST_ID reason · !history child"
-        child = parts[1]
-        if child not in self.config.children:
-            raise InvalidCommand("Unknown child")
-        if command == "history":
-            return (
-                "\n".join(
-                    f"{e['at']} · {e['action']} · {e['outcome']}"
-                    for e in self.gateway.history(child)
-                )
-                or "No changes yet"
+        if command == "link":
+            if len(parts) != 2:
+                raise InvalidCommand("Use the link command shown in My account")
+            self.gateway.claim_link(parts[1], sender)
+            return tr(
+                self.gateway.preferences()["defaultLanguage"],
+                "Return to My account and confirm the messaging account.",
             )
+        actor = "matrix:" + sender
+        self.gateway.authorize(actor)
+        language = self.chat.language(actor)
+        if command in {"language", "roomlanguage"}:
+            if len(parts) != 2:
+                raise InvalidCommand("!language en|de|default · !roomlanguage en|de|default")
+            return self.chat.change_language(
+                actor, "me" if command == "language" else "chat", parts[1]
+            )
+        if command == "confirm":
+            if len(parts) != 2:
+                raise InvalidCommand("!confirm CONFIRMATION")
+            text = self.chat.confirm(parts[1], actor)
+            record = self.chat.record("chat-confirm:" + parts[1])
+            return text + (
+                "\n!confirm " + parts[1] if record.get("pending") else "\n\n" + self.menu(language)
+            )
+        if command == "family":
+            return self.menu(language)
+        if command == "more":
+            return "\n".join(
+                tr(language, label) + ": " + example
+                for label, example in (
+                    ("Status", "!status"),
+                    ("Schedules", "!status child"),
+                    ("Deduct time", "!deducttime child 5m"),
+                    ("Pause today", "!block child"),
+                    ("Unblock", "!unblock child"),
+                    ("Unlimited budget today", "!unlimited child"),
+                    ("Allow rest of day", "!allday child"),
+                    ("Restore defaults", "!restore child"),
+                    ("History", "!history child"),
+                    ("My language", "!language en|de|default"),
+                    ("Group language", "!roomlanguage en|de|default"),
+                )
+            )
+        if command == "status":
+            children = [parts[1]] if len(parts) > 1 else self.config.children
+            return "\n\n".join(
+                status_text(child, self.gateway.status(child), language, self.clock.now())
+                for child in children
+            )
+        if len(parts) < 2:
+            return self.menu(language)
+        selected = (
+            self.config.children if parts[1] == "all" else list(dict.fromkeys(parts[1].split(",")))
+        )
+        if any(child not in self.config.children for child in selected):
+            raise InvalidCommand("Unknown child")
+        child = selected[0]
+        if len(selected) > 1 and command in {"approve", "deny", "history"}:
+            raise InvalidCommand("Choose one child for this action")
+        if command == "history":
+            return "\n".join(
+                f"{timestamp(e['at'], language, self.gateway.status(child).get('timezone', 'UTC'), self.clock.now())} · {tr(language, LABELS.get(e['action'], e['action']))} · {tr(language, e['outcome'] or 'queued')}"
+                for e in self.gateway.history(child)
+            ) or tr(language, "No recent changes")
         body: dict = {}
         if command in {"approve", "deny"}:
             if len(parts) < 3:
@@ -97,8 +161,61 @@ class Matrix:
                         raise InvalidCommand("Use today or a number of days") from exc
             elif len(parts) != 2:
                 raise InvalidCommand("Unexpected arguments")
-        result = self.gateway.command(child, action, body, operation, "matrix:" + sender)
-        return status_text(child, result)
+        if len(selected) > 1 or action in {"unlimited-today", "allow-today"}:
+            identifier, text = self.chat.confirmation(selected, action, body, actor)
+            return text + f"\n!confirm {identifier}"
+        result = self.gateway.command(child, action, body, operation, actor)
+        self.repository.relay_set(
+            "matrix-result:" + operation,
+            {
+                "operationId": result.get("operation", {}).get("operationId"),
+                "requestId": body.get("requestId"),
+                "language": language,
+                "expires": (self.clock.now() + timedelta(days=1)).isoformat(),
+            },
+        )
+        return self.chat.receipt(child, result, action, body, actor)
+
+    def menu(self, language: str) -> str:
+        names = ", ".join(
+            child_label(child, self.gateway.status(child)) + f" ({child})"
+            for child in self.config.children
+        )
+        return (
+            tr(language, "What would you like to do?")
+            + "\n"
+            + names
+            + "\n"
+            + "\n".join(
+                tr(language, label) + ": " + command
+                for label, command in (
+                    ("Add time", "!addtime child|child,child|all 5|15|30|60m"),
+                    ("Extend allowed hours", "!extendaccess child|all 15m"),
+                    ("More", "!more"),
+                )
+            )
+        )
+
+    async def health(self, response: Any) -> None:
+        """Report real sync outcomes; a running process alone is not a healthy adapter."""
+        room = self.client.rooms.get(self.config.roomId)
+        connected = (
+            hasattr(response, "next_batch")
+            and room is not None
+            and bool(room.encrypted) == self.config.encrypted
+        )
+        if connected and self.clock.monotonic() - self.last_health < 30:
+            return
+        try:
+            await asyncio.to_thread(
+                self.gateway.integration_health,
+                "connected" if connected else "problem",
+                self.config.userId,
+                self.config.roomId,
+            )
+            self.last_health = self.clock.monotonic()
+        except (Unavailable, InvalidCommand, OSError):
+            LOG.warning("Matrix health could not reach the backend")
 
     def verify_devices(self) -> None:
         for user, devices in self.config.trustedDevices.items():
@@ -111,33 +228,49 @@ class Matrix:
                         )
                     self.client.verify_device(device)
 
-    async def send(self, text: str, identity: str) -> None:
+    async def send(self, text: str, identity: str, replace: str | None = None) -> str:
         self.verify_devices()
         room = self.client.rooms.get(self.config.roomId)
         if room is None or bool(room.encrypted) != self.config.encrypted:
             raise Unavailable("Matrix room encryption does not match configuration")
+        content: dict = {"msgtype": "m.notice", "body": text[:12000]}
+        if replace:
+            content = {
+                **content,
+                "body": "* " + text[:11998],
+                "m.new_content": content,
+                "m.relates_to": {"rel_type": "m.replace", "event_id": replace},
+            }
         try:
             result = await self.client.room_send(
                 self.config.roomId,
                 "m.room.message",
-                {"msgtype": "m.notice", "body": text[:12000]},
+                content,
                 tx_id=hashlib.sha256(identity.encode()).hexdigest(),
             )
         except self.transport_errors as exc:
             raise Unavailable("Matrix delivery unavailable; message retained for retry") from exc
         if not getattr(result, "event_id", None):
             raise Unavailable("Matrix did not accept the message")
+        return result.event_id
 
     async def receive(self, room: Any, event: Any) -> None:
-        if (
-            room.room_id != self.config.roomId
-            or event.sender == self.config.userId
-            or not event.body.startswith("!")
-        ):
+        if room.room_id != self.config.roomId or event.sender == self.config.userId:
             return
+        content = getattr(event, "source", {}).get("content", {})
+        reply = content.get("m.relates_to", {}).get("m.in_reply_to", {}).get("event_id")
+        text = (
+            event.body.split("\n\n", 1)[-1] if reply and event.body.startswith(">") else event.body
+        )
+        if not text.startswith("!"):
+            return
+        target = self.chat.record("matrix-reply:" + reply) if reply else None
+        parts = text.split()
+        if target and parts[0] in {"!approve", "!deny"}:
+            text = f"{parts[0]} {target['child']} {target['requestId']} " + " ".join(parts[1:])
         if self.config.encrypted and not getattr(event, "decrypted", False):
             return
-        if self.repository.relay_get("matrix-done:" + event.event_id):
+        if self.chat.record("matrix-done:" + event.event_id):
             return
         if len(self.repository.relay_items("matrix-inbox:")) >= 1000:
             raise Unavailable("Matrix inbox is full")
@@ -145,17 +278,29 @@ class Matrix:
             "matrix-inbox:" + event.event_id,
             {
                 "sender": event.sender,
-                "text": event.body,
+                "text": text,
                 "received": event.server_timestamp / 1000,
             },
         )
 
     async def drain(self) -> None:
+        async with self.delivery_lock:
+            await self.deliver_commands()
+
+    async def deliver_commands(self) -> None:
+        if self.pruned_day != self.clock.now().date().isoformat():
+            self.repository.prune_relay(self.clock.now())
+            self.pruned_day = self.clock.now().date().isoformat()
         for key, message in self.repository.relay_items("matrix-inbox:"):
             identity = key.removeprefix("matrix-inbox:")
             try:
                 if time.time() - message["received"] > 600:
-                    text = "This command expired before delivery. Check !family before retrying."
+                    text = tr(
+                        await asyncio.to_thread(
+                            self.chat.response_language, "matrix:" + message["sender"]
+                        ),
+                        "This command expired before delivery. Check !family before retrying.",
+                    )
                 else:
                     try:
                         text = await asyncio.to_thread(
@@ -165,27 +310,114 @@ class Matrix:
                             "matrix:" + hashlib.sha256(identity.encode()).hexdigest(),
                         )
                     except InvalidCommand as exc:
-                        text = str(exc)
-                await self.send(text, "reply:" + identity)
+                        text = error_text(
+                            await asyncio.to_thread(
+                                self.chat.response_language, "matrix:" + message["sender"]
+                            ),
+                            str(exc),
+                        )
+                operation = "matrix:" + hashlib.sha256(identity.encode()).hexdigest()
+                result = self.chat.record("matrix-result:" + operation) or {}
+                saved = (
+                    self.chat.record("matrix-request:" + result["requestId"])
+                    if result.get("requestId")
+                    else None
+                )
+                receipt = (
+                    self.chat.record("matrix-receipt:" + result["operationId"])
+                    if result.get("operationId")
+                    else None
+                )
+                saved = saved or receipt or {}
+                if result.get("operationId"):
+                    current = await asyncio.to_thread(self.gateway.operation, result["operationId"])
+                    status = await asyncio.to_thread(self.gateway.status, current["child"])
+                    text = receipt_text(current["child"], status, current, result["language"])
+                sent = await self.send(text, "reply:" + identity, saved.get("messageId"))
+                if result.get("operationId"):
+                    self.repository.relay_set(
+                        "matrix-receipt:" + result["operationId"],
+                        {
+                            "messageId": saved.get("messageId") or sent,
+                            "language": result["language"],
+                            "expires": (self.clock.now() + timedelta(days=7)).isoformat(),
+                        },
+                    )
             except (Unavailable, OSError):
                 continue
             self.repository.relay_set(
-                "matrix-done:" + identity, {"expires": self.clock.now().isoformat()}
+                "matrix-done:" + identity,
+                {"expires": (self.clock.now() + timedelta(days=7)).isoformat()},
             )
             self.repository.relay_set(key, None)
 
     async def notification(self, event: dict) -> None:
+        async with self.delivery_lock:
+            await self.deliver_event(event)
+
+    async def deliver_event(self, event: dict) -> None:
         child = event["data"].get("child")
         if child not in self.config.children:
             return
+        language = await asyncio.to_thread(self.chat.language)
+        status = await asyncio.to_thread(self.gateway.status, child)
         request = event["data"].get("request")
-        if event["kind"] == "request.changed" and request and request["status"] == "pending":
-            text = f"{child} requests {request.get('minutes') or 15} minutes: {request.get('reason', '')}\n!approve {child} {request['id']} 15m\n!deny {child} {request['id']} reason"
+        operation_id = event["data"].get("operationId")
+        key = None
+        if event["kind"] == "request.changed" and request:
+            current = status.get("request")
+            if current and current["id"] == request["id"]:
+                request = current
+            elif current and request["status"] == "pending":
+                return
+            key = "matrix-request:" + request["id"]
+            saved = self.chat.record(key) or {}
+            if not saved and request["status"] != "pending":
+                return
+            text = request_text(child, status, request, language)
+            if operation_id:
+                text = receipt_text(
+                    child,
+                    status,
+                    await asyncio.to_thread(self.gateway.operation, operation_id),
+                    language,
+                )
+            if request["status"] == "pending":
+                text += (
+                    "\n"
+                    + tr(language, "Choose minutes")
+                    + ": 5, 15, 30, 60 · "
+                    + tr(language, "Custom…")
+                    + f"\n!approve {child} {request['id']} 15m\n!deny {child} {request['id']}"
+                )
+                text += "\n" + tr(
+                    language, "Reply to this message with !approve 15m or !deny reason."
+                )
         elif event["kind"] in {"command.applied", "command.failed", "command.expired"}:
-            text = status_text(child, await asyncio.to_thread(self.gateway.status, child))
+            key = "matrix-receipt:" + operation_id
+            saved = self.chat.record(key) or {}
+            language = saved.get("language", language)
+            text = receipt_text(
+                child,
+                status,
+                await asyncio.to_thread(self.gateway.operation, operation_id),
+                language,
+            )
         else:
             return
-        await self.send(text, "event:" + str(event["id"]))
+        sent = await self.send(text, "event:" + str(event["id"]), saved.get("messageId"))
+        record = {
+            "messageId": saved.get("messageId") or sent,
+            "expires": (self.clock.now() + timedelta(days=7)).isoformat(),
+        }
+        self.repository.relay_set(key, record)
+        if request:
+            self.repository.relay_set(
+                "matrix-reply:" + record["messageId"],
+                {"child": child, "requestId": request["id"], "expires": record["expires"]},
+            )
+        if operation_id:
+            self.repository.relay_set("matrix-receipt:" + operation_id, record)
 
 
 async def run(config: MatrixConfig, repository: Repository) -> None:
@@ -214,6 +446,7 @@ async def run(config: MatrixConfig, repository: Repository) -> None:
             ),
         )
         client.add_event_callback(interface.receive, nio.RoomMessageText)
+        client.add_response_callback(interface.health, (nio.SyncResponse, nio.SyncError))
         loop = asyncio.get_running_loop()
         stop = threading.Event()
 

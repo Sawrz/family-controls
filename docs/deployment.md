@@ -18,8 +18,13 @@ It provides `services.family-controls.backend`, `.agent`, and
 package. Home Manager uses `homeManagerModules.default` and
 `services.family-controls.desktop.enable` for the child UI.
 
-Define the initial child policy once in your deployment and reuse it on server
-and device:
+New installations can omit initial limits: use `managedUsers.<user> = { };` on
+the device and declare the backend child with its timezone and assignments.
+Parents confirm limits in the interface; access stays restricted until then.
+See [child setup and account management](account-and-household.md).
+
+For an optional preconfigured policy, define it once and reuse it on server and
+device:
 
 ```nix
 # A value shared by the following modules, for example through a let binding.
@@ -39,8 +44,9 @@ policy = {
 ```
 
 Process masks must match the actual applications on your devices. DNS names are
-metadata only. Backend policy is seeded from Nix on first use; subsequent API
-policy edits are authoritative and survive rebuilds. Nix continues to define
+metadata only. An explicit Nix policy optionally seeds the backend on first use;
+without it, parents complete child setup in the interface. Saved backend policy
+is authoritative and survives rebuilds. Nix continues to define
 child/device/user assignments, timezone and OS account settings. Assignment edits preserve saved policy and usage. Removed devices’ reserved credit
 remains unavailable until surrendered or the accounting day ends. Before its first
 approved allocation, a device has no metered credit. Its persisted allocation and
@@ -198,6 +204,18 @@ callback completes authentication with an HTTP-only session cookie and returns
 to the parent interface, or explains that approval is pending. Direct API clients
 can start at `/api/v1/auth/oidc/home/start` and request the callback as JSON.
 
+The interface displays the OIDC `name`, falling back to `preferred_username` and
+then the internal account ID. Names refresh on sign-in, including for existing
+and bootstrap accounts; no database reset is needed. Missing profile information
+preserves the last known name. Names are labels only: issuer and subject remain
+the identity, and name changes never grant access or merge accounts.
+
+The backend requests `openid profile` and reads validated ID-token claims. When
+these omit a usable name, it uses the provider's HTTPS UserInfo endpoint if
+available, verifying that its subject matches the ID token. A failed UserInfo
+request or subject mismatch rejects the sign-in. For Authentik, enable the
+provider's standard `profile` scope mapping. No email scope is needed.
+
 `GET /api/v1/accounts` lists pending accounts, including OIDC issuer/subject.
 Approve with `POST /api/v1/accounts/NAME/approve` and `{"role":"parent"}`.
 Invitations use `POST /api/v1/invitations` with `identity`, `method` and `role`;
@@ -323,3 +341,5 @@ then test a small extension, child request, five/one-minute warning and offline
 recovery. VM tests exercise real Timekpr and backend services, but cannot verify
 your external accounts, selected process masks, physical suspend or compositor
 notification/fullscreen behavior. The repository does not activate `nix-config`.
+
+Chat language defaults and parent-managed overrides are described in [Chat interfaces](chat-interfaces.md#language-and-names).

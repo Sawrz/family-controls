@@ -78,7 +78,20 @@ Deployment and secret provisioning belong to the consuming Nix configuration.
 - Approve a request with a custom duration or deny it with a reason. Each request
   has a stable identity and only one resolving parent decision.
 - Read and edit recurring policies with revision checks.
-- Support administrative account/device approval, invitations and identity links.
+- Confirm each new child's initial limits in the interface, with editable suggestions
+  and copying from another child; Nix policy seeds are optional.
+- Separate personal profile, language, password and verified messaging connections
+  from household administration. Show Telegram and Matrix independently, with
+  actual adapter health, linked parents and ownership-scoped disconnect actions.
+- Share one English/German account language across web, Telegram and Matrix, with
+  household fallback. Administrators can override the language of shared group or
+  room notifications without changing personal replies.
+- Edit child display names in Schedules without changing stable child or computer
+  account identities; use the same names across interfaces.
+- Offer chat menus for everyday changes and explicit confirmations that name each
+  child and the amount each receives. Replace resolved request cards with concise
+  decision and delivery receipts, including decisions made in another interface.
+- Support administrative account/device approval, invitations, role changes and identity links.
 - Support password and OIDC authentication. Registration and login for each method
   are independently configurable; registration requires approval by default.
 
@@ -115,6 +128,8 @@ ideas, not delivered features or approved web requirements.
 - [README.md](README.md): existing capabilities, command semantics and architecture.
 - [Deployment guide](docs/deployment.md): roles, authentication, approval and
   configuration workflows.
+- [Chat interfaces](docs/chat-interfaces.md): language inheritance, menus, request
+  decisions and delivery updates in Telegram and Matrix.
 - [Implementation report](docs/review/implementation.md): verification results and
   boundaries, including simulated external messaging and OIDC services.
 - [Baseline review](docs/review/2026-10-18-review.md): original findings and product

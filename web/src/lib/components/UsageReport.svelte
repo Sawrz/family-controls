@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { childName } from '../contracts';
   import { untrack } from 'svelte';
   import { Api, errorKey } from '#lib/api.ts';
   import { weeklyUsage, type Child, type WeeklyUsage } from '#lib/contracts.ts';
@@ -77,7 +78,7 @@
     <label class="short-field"
       >{t('account')}
       <select aria-label={t('account')} bind:value={childId} onchange={() => (start = '')}>
-        {#each children as child}<option value={child.id}>{child.id}</option>{/each}
+        {#each children as child}<option value={child.id}>{childName(child)}</option>{/each}
       </select>
     </label>
   {/if}

@@ -9,9 +9,12 @@ export const webConfig = z.object({
 export type WebConfig = z.infer<typeof webConfig>;
 export const account = z.object({
   username: z.string(),
+  displayName: z.string(),
+  language: z.enum(['en', 'de']).nullable(),
+  hasPassword: z.boolean(),
   role: z.enum(['admin', 'parent']),
   status: z.enum(['pending', 'approved', 'revoked']),
-  oidc: z.unknown(),
+  oidc: z.object({ issuer: z.string(), subject: z.string() }).nullable(),
 });
 export type Account = z.infer<typeof account>;
 const pendingRequest = z
@@ -23,7 +26,12 @@ const pendingRequest = z
     expires_at: z.string(),
   })
   .passthrough();
+export const languagePreferences = z.object({
+  defaultLanguage: z.enum(['en', 'de']),
+  chatLanguages: z.record(z.string(), z.enum(['en', 'de'])),
+});
 export const status = z.object({
+  displayName: z.string().optional(),
   reportedUsedSeconds: z.number(),
   availableSeconds: z.number(),
   reservedSeconds: z.number(),
@@ -61,7 +69,9 @@ export const status = z.object({
 });
 export type Status = z.infer<typeof status>;
 export const policy = z.object({
+  displayName: z.string().nullable().optional(),
   revision: z.number(),
+  setupComplete: z.boolean(),
   assignments: z.array(z.object({ device: z.string(), user: z.string() })),
   timezone: z.string(),
   policy: z.object({
@@ -83,6 +93,36 @@ export const policy = z.object({
   }),
 });
 export type Policy = z.infer<typeof policy>;
+export const authentication = z.object({
+  password: method,
+  oidc: method,
+  requireApproval: z.boolean(),
+  providers: z.array(z.object({ id: z.string(), label: z.string(), issuer: z.string() })),
+});
+export const linkChallenge = z.object({
+  challengeId: z.string(),
+  expires: z.string(),
+  externalId: z.string().nullable(),
+  label: z.string().nullable(),
+});
+export const integration = z.object({
+  kind: z.enum(['telegram', 'matrix']),
+  configured: z.boolean(),
+  status: z.enum(['not-configured', 'connected', 'problem', 'unknown']),
+  bot: z.string().nullable(),
+  destination: z.string().nullable(),
+  lastSuccess: z.string().nullable(),
+  links: z.array(
+    z.object({
+      externalId: z.string(),
+      label: z.string().nullable(),
+      username: z.string(),
+      displayName: z.string(),
+    }),
+  ),
+  challenge: linkChallenge.nullable(),
+});
+export type Integration = z.infer<typeof integration>;
 export type Child = { id: string; policy: Policy; status: Status };
 export function assignmentLabel(child: Child): string {
   return child.policy.assignments.map((a) => `${a.device} · ${a.user}`).join(', ');
@@ -126,6 +166,7 @@ export const device = z.object({
   device: z.string(),
   status: z.string(),
   enrolledAt: z.string().nullable(),
+  lastSeen: z.string().nullable().default(null),
   policyRevision: z.number().default(0),
   managedBy: z.enum(['configuration', 'parent']).default('parent'),
 });
@@ -161,3 +202,11 @@ export type Command = {
 export const receipt = z.object({
   operation: z.object({ operationId: z.string(), status: z.string() }),
 });
+
+export function childName(child: Child): string {
+  return (
+    child.status.displayName ||
+    child.policy.displayName ||
+    child.id.charAt(0).toLocaleUpperCase() + child.id.slice(1)
+  );
+}

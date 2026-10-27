@@ -98,8 +98,39 @@ class Gateway:
     def __init__(self, connection: BackendConnection) -> None:
         self.client = BackendClient(connection)
 
+    def claim_link(self, token: str, external_id: str, label: str | None = None) -> None:
+        self.client.request(
+            "/api/v1/adapter/link", {"token": token, "externalId": external_id, "label": label}
+        )
+
+    def integration_health(self, status: str, bot: str | None, destination: str) -> None:
+        self.client.request(
+            "/api/v1/adapter/health",
+            {
+                "status": status,
+                "bot": bot,
+                "destination": destination,
+            },
+        )
+
     def authorize(self, actor: str) -> dict:
         return self.client.request("/api/v1/me", headers={"X-Family-Actor": actor})
+
+    def preferences(self) -> dict:
+        return self.client.request("/api/v1/preferences")
+
+    def language(self, actor: str, scope: str, language: str | None) -> dict:
+        return self.client.request(
+            "/api/v1/adapter/language",
+            {"scope": scope, "language": language},
+            method="PUT",
+            headers={"X-Family-Actor": actor},
+        )
+
+    def operation(self, operation: str) -> dict:
+        from urllib.parse import quote
+
+        return self.client.request("/api/v1/operations/" + quote(operation, safe=""))
 
     def status(self, child: str) -> dict:
         return self.client.request(f"/api/v1/children/{child}/status")

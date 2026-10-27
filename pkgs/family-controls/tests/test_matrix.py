@@ -131,3 +131,22 @@ def test_matrix_bad_commands_cannot_change_policy(matrix, text):
     with pytest.raises(InvalidCommand):
         matrix.execute(text, "@parent:test", "bad")
     assert matrix.gateway.status("child")["revision"] == 0
+
+
+def test_matrix_linking_and_health_follow_verified_events_and_sync(matrix, monkeypatch):
+    claims, health = [], []
+    monkeypatch.setattr(
+        matrix.gateway,
+        "claim_link",
+        lambda token, sender: claims.append((token, sender)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        matrix.gateway, "integration_health", lambda *args: health.append(args), raising=False
+    )
+    result = matrix.execute("!link " + "x" * 43, "@parent:test", "one")
+    assert claims == [("x" * 43, "@parent:test")] and "confirm" in result
+    asyncio.run(matrix.health(SimpleNamespace(next_batch="synced")))
+    assert health[-1][0] == "connected"
+    asyncio.run(matrix.health(SimpleNamespace(error="offline")))
+    assert health[-1][0] == "problem"

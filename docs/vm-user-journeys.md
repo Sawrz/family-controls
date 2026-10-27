@@ -15,6 +15,8 @@ The journeys cover:
 
 1. Parent sign-in through an external HTTPS proxy and the module’s HTTP listener;
    two declarative devices connect and enroll without invitations or approval.
+   An unseeded sibling starts restricted, receives parent-confirmed limits through
+   the browser and can then open a local session.
 2. A custom grant applied to today's Timekpr allowance, a lost HTTP response,
    reload and safe retry without granting twice or changing a sibling's budget.
 3. Five-minute and one-minute native notifications, the notification's request
@@ -31,6 +33,9 @@ The journeys cover:
    credit locally and reconciling usage after reconnection.
 9. Credential rotation and removal reject old/cross-device tokens and preserve
    weekly usage through backend restarts.
+10. Profile editing, verified personal Telegram linking through the deployed
+    adapter's OS-authenticated socket, the household health/link overview, and
+    disconnecting. Child setup remains complete after the preceding restarts.
 
 These are ordered stages in one disposable household. Run the whole check;
 later stages deliberately retain enrollment, session and command-history state.
@@ -59,7 +64,7 @@ silently converted into skips. Credentials and certificates are disposable test
 fixtures. The browser accepts the fixture's self-signed certificate; agent and
 Nginx upstream certificate verification remain enabled.
 
-The verified run on 2026-10-26 passed all nine journeys in 263.28 seconds. Pytest
+The verified run on 2026-10-27 passed all ten journeys in 306.32 seconds. Pytest
 treats warnings as errors. After pytest completes, the pinned Nix test driver can
 emit resource-cleanup warnings during its own teardown; the successful run exited
 with status zero. No dependency code was modified or warnings suppressed.
@@ -76,7 +81,7 @@ Sources: [VM deployment](../tests/web-vm.nix) and
 [pytest journeys](../tests/web_vm/test_journeys.py).
 
 The final run’s artifacts are in
-`/nix/store/c0w2lilr80v26v3vyngbxk9di0yn41gr-vm-test-run-family-controls-web-journeys`.
+`/nix/store/ix4i61kgfwkz79qpcqz9ad10hj2wqbsc-vm-test-run-family-controls-web-journeys`.
 `request-approved.png` captures the child’s usage and shared balance; the final
 child capture is blank after the later session-termination journey. Browser
 reports, JUnit results and three journals remain available in that output.
@@ -86,3 +91,8 @@ configuration/restarts, rejects old and cross-device tokens, and checks that
 weekly usage survives. The separate central VM suite retains manual enrollment
 and messaging-adapter workflows. Browser checks exercise OIDC callback routing
 through both proxy hops with a controlled provider; no live household IdP is used.
+
+The chat VM journey additionally changes the shared parent language from Matrix,
+opens Telegram's translated menu, confirms and retries an all-children grant,
+and resolves a device request from Matrix. Both adapters consume the resulting
+SSE decision and application events and replace their original request messages.

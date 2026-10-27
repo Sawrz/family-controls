@@ -5,6 +5,13 @@ SvelteKit/TypeScript files, with English and German UI text. Nginx serves it und
 the same HTTPS origin as the existing FastAPI API. No Node application server,
 or additional policy store is required.
 
+The interface separates **My account** from **Household administration**.
+Personal profile, password and verified messaging links are available to each
+parent. Administrators have dedicated People, Children, Devices, Integrations
+and Sign-in sections. Telegram and Matrix show their connections independently.
+New children have a short policy setup form; Nix policy seeds are optional.
+See [the account and setup guide](account-and-household.md).
+
 ## Deploy with a local backend
 
 Import `family-controls.nixosModules.default`, keep the backend configuration,
@@ -97,10 +104,12 @@ The four password/OIDC login/registration switches remain independent.
 - **History:** inspect commands, actor, delivery outcome and operation identity.
   The current backend history response does not include command amounts or
   reason text; the web interface does not invent them.
-- **Settings:** choose language. Administrators can approve/revoke parent
-  accounts and manually enrolled devices, create invitations/enrollment tokens and link
-  Telegram, Matrix or OIDC identities. Declarative devices are labelled as managed
-  by configuration and enroll automatically. Bootstrap remains a deployment operation.
+- **My account:** manage profile, language, enabled password credentials and
+  verified personal Telegram/Matrix connections. Provider-managed names are read-only.
+- **Household administration:** administrators manage people, invitations, roles,
+  child setup, devices, integration links and sign-in providers in separate sections.
+  Declarative devices are labelled as managed by configuration and enroll automatically.
+  Bootstrap remains a deployment operation.
 
 Device/account assignments are configured in Nix. Shared computers need separate
 OS accounts for different children. A shared OS login cannot distinguish children;
@@ -112,7 +121,8 @@ The interface labels every target with its child identifier, computer and accoun
 ## Delivery and authentication
 
 The API's HttpOnly, Secure, SameSite cookie authenticates browser requests and
-SSE. The frontend does not store bearer tokens. Language is a local preference;
+SSE. The frontend does not store bearer tokens. Language is saved in the parent
+profile, with a local preference for the signed-out screen;
 an uncertain command's ID and payload are retained in session storage for that
 parent so a reload/retry cannot grant time twice. Logging in as another parent
 does not replay it. A fresh command is never silently created as a retry.

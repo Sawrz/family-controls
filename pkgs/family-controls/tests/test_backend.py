@@ -263,6 +263,7 @@ def test_policy_edit_reaches_device_and_survives_local_cache(central):
     sync = agent(central)
     policy = central.client.get("/api/v1/children/child/policy").json()
     revision = policy.pop("revision")
+    policy.pop("setupComplete")
     policy["policy"]["playTime"]["dailyLimitMinutes"] = 90
     assert (
         central.client.put("/api/v1/children/child/policy?revision=1", json=policy).status_code
@@ -323,6 +324,7 @@ def test_crash_after_local_commit_before_acknowledgement_cannot_misreport_expiry
 def test_invalid_recurring_policy_is_rejected_before_it_can_block_device_sync(central):
     policy = central.client.get("/api/v1/children/child/policy").json()
     policy.pop("revision")
+    policy.pop("setupComplete")
     policy["policy"]["timeWindows"]["allowed"] = {"ALL": ["09:00-09:15", "09:30-10:00"]}
     response = central.client.put("/api/v1/children/child/policy?revision=1", json=policy)
     assert response.status_code == 400

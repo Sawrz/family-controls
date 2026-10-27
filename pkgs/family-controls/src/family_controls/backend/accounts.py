@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..domain import Conflict, InvalidCommand
 from ..ports import Clock
-from .models import Authentication, Invitation, Registration
+from .models import Authentication, Invitation, PasswordChange, ProfileUpdate, Registration
 from .ports import Passwords, Store
 
 
@@ -68,7 +68,12 @@ class Accounts:
 
     @staticmethod
     def public(account: dict) -> dict:
-        return {key: account[key] for key in ("username", "role", "status", "oidc")}
+        return {
+            **{key: account[key] for key in ("username", "role", "status", "oidc")},
+            "displayName": account.get("displayName") or account["username"],
+            "language": account.get("language"),
+            "hasPassword": bool(account.get("password")),
+        }
 
     def invite(self, invitation: Invitation, actor: str) -> str:
         self.account(actor, admin=True)
@@ -84,6 +89,68 @@ class Accounts:
             )
             self.audit("account.invited", {"actor": actor, "identity": invitation.identity})
         return token
+
+    def profile(self, username: str, update: ProfileUpdate) -> dict:
+        with self.store.transaction():
+            account = self.account(username)
+            if update.displayName is not None:
+                if account.get("oidc"):
+                    raise Forbidden("Profile name is managed by the identity provider")
+                name = " ".join(update.displayName.split())
+                if not name or not name.isprintable():
+                    raise InvalidCommand("Enter a readable name")
+                account["displayName"] = name
+            account["language"] = update.language
+            self.store.put("accounts", username, account)
+        return self.public(account)
+
+    def change_password(self, username: str, change: PasswordChange, credential: str) -> None:
+        if not self.config.password.login:
+            raise Forbidden("Password login is disabled")
+        with self.store.transaction():
+            account = self.account(username)
+            session = self.store.get("sessions", digest(credential))
+            if not session or session["username"] != username:
+                raise Unauthorized("Sign in again before changing your password")
+            if account.get("password"):
+                if not self.passwords.verify(
+                    account["password"], change.currentPassword.get_secret_value()
+                ):
+                    raise Unauthorized("Current password is incorrect")
+            elif (
+                session["method"] != "oidc"
+                or session.get("createdAt", "")
+                < (self.clock.now() - timedelta(minutes=15)).isoformat()
+            ):
+                raise Unauthorized("Sign in with your identity provider again first")
+            account["password"] = self.passwords.hash(change.newPassword.get_secret_value())
+            self.store.put("accounts", username, account)
+            for key, other in self.store.items("sessions"):
+                if other["username"] == username and key != digest(credential):
+                    self.store.delete("sessions", key)
+            self.audit("account.password-changed", {"actor": username})
+
+    def set_role(self, username: str, role: str, actor: str) -> dict:
+        with self.store.transaction():
+            self.account(actor, admin=True)
+            account = self.account(username)
+            if (
+                role != "admin"
+                and account["role"] == "admin"
+                and len(
+                    [
+                        a
+                        for _, a in self.store.items("accounts")
+                        if a["status"] == "approved" and a["role"] == "admin"
+                    ]
+                )
+                == 1
+            ):
+                raise Conflict("Cannot demote the last administrator")
+            account["role"] = role
+            self.store.put("accounts", username, account)
+            self.audit("account.role-changed", {"actor": actor, "username": username, "role": role})
+        return self.public(account)
 
     def consume_invitation(self, token: str | None, method: str, identity: str) -> dict | None:
         if token is None:
@@ -133,6 +200,7 @@ class Accounts:
                 {
                     "username": account["username"],
                     "method": method,
+                    "createdAt": self.clock.now().isoformat(),
                     "expires": (
                         self.clock.now() + timedelta(seconds=self.config.sessionSeconds)
                     ).isoformat(),
@@ -191,6 +259,9 @@ class Accounts:
         with self.store.transaction():
             self.account(actor, admin=True)
             self.account(username)
+            existing = self.store.get("identities", f"{interface}:{external_id}")
+            if existing and existing["username"] != username:
+                raise Conflict("Messaging identity already belongs to another account")
             self.store.put("identities", f"{interface}:{external_id}", {"username": username})
             self.audit(
                 "identity.linked", {"actor": actor, "interface": interface, "username": username}
@@ -217,7 +288,15 @@ class Accounts:
             self.store.put("accounts", username, account)
             self.audit("identity.oidc-linked", {"actor": actor, "username": username})
 
-    def oidc_account(self, issuer: str, subject: str, invitation_token: str | None) -> dict:
+    def oidc_account(
+        self,
+        issuer: str,
+        subject: str,
+        invitation_token: str | None,
+        *,
+        display_name: str | None = None,
+    ) -> dict:
+        """Resolve a stable identity and refresh its optional presentation name."""
         identity = issuer + "#" + subject
         key = digest(identity)
         with self.store.transaction():
@@ -226,6 +305,9 @@ class Accounts:
                 account = self.store.get("accounts", existing["username"])
                 if account is None:
                     raise Unauthorized("Identity account is missing")
+                if display_name and account.get("displayName") != display_name:
+                    account["displayName"] = display_name
+                    self.store.put("accounts", account["username"], account)
                 return account
             if not self.config.oidc.registration:
                 raise Forbidden("OIDC registration is disabled")
@@ -233,6 +315,7 @@ class Accounts:
             username = "oidc-" + key[:24]
             account = {
                 "username": username,
+                "displayName": display_name,
                 "password": None,
                 "oidc": {"issuer": issuer, "subject": subject},
                 "role": invitation["role"] if invitation else "parent",

@@ -2,7 +2,7 @@
 
 import json
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -16,14 +16,17 @@ from ..domain import (
     Request,
     State,
     Unavailable,
+    Window,
     duration,
+    effective_policy,
+    hhmm,
     midnight_after,
     state_from_dict,
 )
 from ..ports import Clock
 from ..usage import Usage
 from .accounts import Forbidden, Unauthorized, digest
-from .models import BackendConfig, ChildPolicy, DeviceReport, Enrollment
+from .models import BackendConfig, ChildPolicy, ChildSetup, DeviceReport, Enrollment
 from .ports import Store
 from .usage import UsageLedger
 
@@ -51,7 +54,15 @@ class Backend:
                 validate_policy(policy.policy)
                 existing = store.get("policies", child)
                 if existing is None:
-                    store.put("policies", child, {"revision": 1, **policy.model_dump()})
+                    store.put(
+                        "policies",
+                        child,
+                        {
+                            "revision": 1,
+                            "setupComplete": "policy" in policy.model_fields_set,
+                            **policy.model_dump(),
+                        },
+                    )
                 elif "assignments" not in existing:
                     raise InvalidCommand(
                         "Legacy device-bound policies require an explicit shared-budget migration"
@@ -79,12 +90,40 @@ class Backend:
         policy = self.store.get("policies", child)
         if policy is None:
             raise KeyError(child)
-        return policy
+        return {"setupComplete": True, **policy}
 
-    def set_policy(self, child: str, policy: ChildPolicy, revision: int, actor: str) -> dict:
+    def setup_child(self, child: str, setup: ChildSetup, revision: int, actor: str) -> dict:
+        """Confirm a child's first recurring policy once, with optimistic concurrency."""
+        old = self.policy(child)
+        if old["setupComplete"]:
+            raise Conflict("Child setup is already complete; edit its recurring policy")
+        candidate = ChildPolicy.model_validate(
+            {
+                key: old[key]
+                for key in ("assignments", "timezone", "policy", "displayName")
+                if key in old
+            }
+        )
+        candidate.policy.playTime.dailyLimitMinutes = setup.dailyLimitMinutes
+        candidate.policy.timeWindows = setup.timeWindows
+        return self.set_policy(child, candidate, revision, actor, completing_setup=True)
+
+    def set_policy(
+        self,
+        child: str,
+        policy: ChildPolicy,
+        revision: int,
+        actor: str,
+        *,
+        completing_setup: bool = False,
+    ) -> dict:
         self.validate_policy(policy.policy)
         with self.store.transaction():
             old = self.policy(child)
+            if completing_setup and old["setupComplete"]:
+                raise Conflict("Child setup is already complete")
+            if not old["setupComplete"] and not completing_setup:
+                raise Conflict("Complete child setup before editing its policy")
             if old["revision"] != revision:
                 raise Conflict("Policy changed; refresh before editing")
             if (old["assignments"], old["timezone"]) != (
@@ -92,7 +131,7 @@ class Backend:
                 policy.timezone,
             ):
                 raise InvalidCommand("Assignments and timezone are deployment settings")
-            result = {"revision": revision + 1, **policy.model_dump()}
+            result = {"revision": revision + 1, "setupComplete": True, **policy.model_dump()}
             self.store.put("policies", child, result)
             self.emit(
                 "policy.changed",
@@ -253,6 +292,8 @@ class Backend:
         fingerprint = digest(json.dumps([child, action, payload, actor], sort_keys=True))
         with self.store.transaction():
             policy = self.policy(child)
+            if not policy["setupComplete"]:
+                raise Conflict("Complete child setup before granting access")
             previous = self.store.get("commands", operation)
             if previous:
                 if previous["fingerprint"] != fingerprint:
@@ -295,6 +336,11 @@ class Backend:
                 "status": "queued",
             }
             self.store.put("commands", operation, record)
+            if state.request and action in {"decide-request", "block", "mute"}:
+                self.emit(
+                    "request.changed",
+                    {"child": child, "request": asdict(state.request), "operationId": operation},
+                )
             for assignment in policy["assignments"]:
                 self.emit(
                     "command.queued",
@@ -339,8 +385,26 @@ class Backend:
         )
         request = state.request if state.request and state.request.active(now) else None
         last_seen = min((d["lastSeen"] for d in devices if d["lastSeen"]), default=None)
+        user = User.model_validate(policy["policy"])
+        allowed = user.timeWindows.for_day(now.isoweekday())
+        homework = user.timeWindows.for_day(now.isoweekday(), homework=True)
+        effective = effective_policy(
+            allowed, homework, user.playTime.dailyLimitMinutes * 60, state, now
+        )
+
+        def windows(values: Sequence[Window]) -> list[str]:
+            return [f"{hhmm(w.start)}–{hhmm(w.end)}" for w in values]
+
         return {
+            "displayName": policy.get("displayName") or child[:1].upper() + child[1:],
+            "timezone": policy["timezone"],
+            "schedule": {
+                "regular": windows(allowed),
+                "today": windows(effective.windows),
+                "unmetered": windows(effective.homework),
+            },
             "user": child,
+            "setupComplete": policy["setupComplete"],
             "revision": policy["revision"],
             "devices": devices,
             "phase": "blocked"
@@ -384,6 +448,30 @@ class Backend:
                 "allowedLeft": "See device status",
             },
         }
+
+    def reconcile_notifications(self) -> None:
+        """Persist time-driven outcomes so reconnecting interfaces can replace stale cards."""
+        with self.store.transaction():
+            for child in self.config.children:
+                raw = self.store.get("child-state", child)
+                state = self.state(child)
+                if (
+                    raw
+                    and raw.get("request")
+                    and raw["request"]["status"] == "pending"
+                    and state.request
+                    and state.request.status != "pending"
+                ):
+                    self.store.put("child-state", child, asdict(state))
+                    self.emit("request.changed", {"child": child, "request": asdict(state.request)})
+                for command in self.store.pending_commands(child):
+                    if datetime.fromisoformat(command["expiresAt"]) <= self.clock.now():
+                        command["status"] = "expired"
+                        self.store.put("commands", command["operationId"], command)
+                        self.emit(
+                            "command.expired",
+                            {"child": child, "operationId": command["operationId"]},
+                        )
 
     def history(self, child: str) -> list[dict]:
         self.policy(child)
@@ -438,7 +526,9 @@ class Backend:
                             policy["revision"] += 1
                             self.store.put("child-state", child, asdict(state))
                             self.store.put("policies", child, policy)
-                            self.emit("request.changed", {"child": child})
+                            self.emit(
+                                "request.changed", {"child": child, "request": asdict(request)}
+                            )
                 elif (
                     incoming
                     and incoming.get("status") == "cancelled"
@@ -450,7 +540,7 @@ class Backend:
                     policy["revision"] += 1
                     self.store.put("child-state", child, asdict(state))
                     self.store.put("policies", child, policy)
-                    self.emit("request.changed", {"child": child})
+                    self.emit("request.changed", {"child": child, "request": asdict(state.request)})
                 today = self.local_now(child).date()
                 key = self.usage.key(child, device, user, today)
                 stored = self.store.get("usage", key)
@@ -491,12 +581,24 @@ class Backend:
                         self.store.get("reports", child + "/" + a["device"]) or {}
                         for a in policy["assignments"]
                     ]
+                    errors = [
+                        d.get("status", {}).get("application", {}).get("error") for d in deliveries
+                    ]
+                    error = next((e for e in errors if e), None)
+                    if error and command.get("error") != error:
+                        command["error"] = error
+                        self.store.put("commands", command["operationId"], command)
+                        self.emit(
+                            "command.failed",
+                            {"child": child, "operationId": command["operationId"]},
+                        )
                     if all(
                         d.get("revision", 0) >= command["revision"]
                         and d.get("status", {}).get("application", {}).get("status") == "applied"
                         for d in deliveries
                     ):
                         command["status"] = "applied"
+                        command.pop("error", None)
                         self.store.put("commands", command["operationId"], command)
                         self.emit(
                             "command.applied",

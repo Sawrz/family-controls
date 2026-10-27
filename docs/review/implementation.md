@@ -2,9 +2,49 @@
 
 The hard-cut central architecture replaces the implementation described by the
 [2026-10-18 baseline review](2026-10-18-review.md). Work is on
-`feature/shared-child-usage`. No live `nix-config`, production credentials,
+`main`. No live `nix-config`, production credentials,
 runtime databases or external chat accounts were changed. `AGENTS.md` and external dependencies are untouched. The user explicitly authorized
 changes to this repository’s core package and summed simultaneous device usage.
+
+## Child onboarding and account administration
+
+New children can be declared without a policy seed. The backend persists their
+setup state, rejects time grants until confirmation, and sends restricted policy
+to fresh devices. Parents confirm allowance and hours or copy another child's
+schedule. Existing policy and offline allocations survive configuration changes.
+
+My account separates personal profile, saved language, password management and
+verified messaging links from administrator-only household settings. Telegram and
+Matrix each expose their own metadata, links and fresh/stale connection state.
+Linking requires a service-observed identity followed by browser confirmation;
+listing, unlinking, roles and health reporting enforce backend permissions.
+OIDC names refresh from validated provider claims on sign-in.
+
+The packaged Python suite passes 245 tests with 80.04% branch-aware coverage;
+the separate Matrix SDK runtime test also passes. All 37 browser workflows pass
+with 98.21% frontend statement coverage,
+including setup conflict recovery, draft isolation between children, keyboard
+focus, profile changes and verified link/unlink. Ten real browser-to-device VM
+journeys cover first setup and the deployed adapter socket in addition to
+enforcement, shared budgets, offline use and restarts. External provider transport
+remains simulated. See [account/setup guide](../account-and-household.md) and
+[VM journeys](../vm-user-journeys.md).
+
+The onboarding/account build passed `nix flake check --offline -L`, including both
+VM suites. Flake evaluation also passed for both supported architectures with
+`--all-systems --no-build`; no ARM runtime execution is claimed.
+
+A follow-up found that stored `request.changed` events omitted the request data
+expected by both messaging adapters. Events now include the request snapshot.
+Regression coverage synchronizes a real device request, delivers its stored event
+to both adapters and checks cancellation. The central VM additionally checks both
+authenticated SSE subscriptions and outbound group/room payloads, with only the
+external messaging transport simulated. The follow-up unit, lint and central VM
+checks passed; the VM script completed in 135.47 seconds.
+
+Impeccable's finish review found three setup defects; the fixes passed its
+follow-up review with disposition `ship`. Desktop and phone captures were renewed,
+and the documenter recorded the retained design system's new settings patterns.
 
 
 ## Declarative enrollment and web deployment
@@ -28,8 +68,9 @@ remains the external HTTPS origin. Assets, API, OIDC callback routing and SSE ar
 preserved through both proxy hops. The package overlay contributes no packages
 on unsupported platforms; i686 package-set evaluation is covered explicitly.
 
-The final `nix flake check --offline -L` passed all 11 x86_64 checks. The packaged
-suite passed 225 tests with 79.45% coverage; the separate Matrix runtime check
+The earlier declarative-enrollment verification passed all 11 x86_64 checks with
+`nix flake check --offline -L`. Its packaged suite passed 225 tests with 79.45%
+coverage; the separate Matrix runtime check
 passed its SDK test. All 34 browser workflows passed through the external HTTPS
 proxy and internal HTTP listener. Nine real browser-to-device VM journeys passed
 in 263.28 seconds, including derived assignments, token rotation, removal and
@@ -174,7 +215,8 @@ The suite includes:
 - A separate browser-to-device run with Chromium and HTTPS Nginx on the backend
   VM (2,048 MiB), the native child UI on the managed-device VM (1,536 MiB), and a
   second managed laptop (1,536 MiB) sharing the same child allowance.
-  Nine ordered journeys cover automatic declarative enrollment, a custom grant with
+  Ten ordered journeys cover automatic declarative enrollment, first child setup,
+  personal linking and household integration visibility, a custom grant with
   lost-response retry, five/one-minute warnings and a child request, real activity
   termination at exhaustion, extensions/unlimited/blocking, queued delivery
   through a backend restart, routine persistence, simultaneous usage, weekly reports
@@ -215,3 +257,26 @@ repeat after an uncertain send, while repeated commands cannot repeat a grant.
 Named holiday schedules, weekday-specific budgets and temporary pause timers
 remain optional product backlog. Daily/weekly usage reports are implemented. DNS enforcement needs a provider
 contract. The web interface does not add these backend capabilities.
+
+## Chat workflow redesign (October 2026)
+
+Chat adapters now share account language preferences, household/group fallbacks,
+child display names, minute/date formatting and concise delivery receipts.
+Telegram uses nested menus with explicit child selection and bulk confirmation;
+Matrix supports equivalent commands and replies to request messages. Decisions,
+cancellations and expiry update existing request cards across interfaces.
+
+Verification includes language authorization and inheritance, owner-bound and
+idempotent bulk retries, custom menu journeys, Matrix reply identity, stale
+request rejection, recovery for unlinked senders, shared child names and browser
+settings. The central VM journey exercises both outbound notification adapters,
+Matrix decisions updating both original messages over SSE, and device application.
+External chat services are simulated; no live household messages are sent.
+See [Chat interfaces](../chat-interfaces.md) for behavior and deployment defaults.
+
+Final validation: `nix flake check --offline -L` passed all x86_64 checks:
+261 Python tests passed (one skipped), 80.23% branch-aware coverage, 39 browser
+journeys, Matrix SDK runtime verification, central adapter/device VM integration,
+and 10 deployed browser-to-device VM journeys. All-system evaluation also passed
+with `nix flake check --offline --all-systems --no-build`; aarch64 was evaluated,
+not executed. Impeccable scored both requested localization/copy fixes resolved.

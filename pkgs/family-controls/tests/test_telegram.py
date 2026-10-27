@@ -40,9 +40,25 @@ class Gateway:
         self.service = service
         self.offline = set()
         self.calls = []
+        self.language_preferences = {"defaultLanguage": "en", "chatLanguages": {}}
+        self.languages = {}
 
     def authorize(self, actor):
-        return {"username": actor}
+        return {"username": actor, "role": "admin", "language": self.languages.get(actor)}
+
+    def preferences(self):
+        return self.language_preferences
+
+    def language(self, actor, scope, language):
+        if scope == "me":
+            self.languages[actor] = language
+        elif language:
+            self.language_preferences["chatLanguages"][actor.split(":")[0]] = language
+        else:
+            self.language_preferences["chatLanguages"].pop(actor.split(":")[0], None)
+
+    def operation(self, operation):
+        raise AssertionError("Use a real backend for operation notifications")
 
     def history(self, child):
         return self.service.repository.history(child)
@@ -140,7 +156,7 @@ def test_stale_approval_cannot_approve_a_later_request(relay):
         button
         for row in relay.adapter.keyboard("child", status)
         for button in row
-        if button["text"] == "Deny request"
+        if button["text"] == "Deny"
     )
     relay.adapter.handle(click(button))
     relay.setup.clock.advance(seconds=61)
@@ -154,8 +170,11 @@ def test_child_selector_for_unlimited_requires_confirmation(relay):
     selector = relay.transport.sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]
     relay.adapter.handle(click(selector, update=2))
     assert not relay.gateway.calls
+    proceed = relay.transport.sent[-1][1]["reply_markup"]["inline_keyboard"][-1][0]
+    relay.adapter.handle(click(proceed, update=3))
+    assert not relay.gateway.calls
     confirmation = relay.transport.sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]
-    relay.adapter.handle(click(confirmation, update=3))
+    relay.adapter.handle(click(confirmation, update=4))
     assert relay.setup.service.status("child")["unlimitedToday"]
 
 
@@ -243,7 +262,7 @@ def test_expired_button_and_help_are_safe(relay):
     relay.adapter.handle(message("/help", update=2))
     assert not relay.gateway.calls
     assert "expired" in texts(relay)[0]
-    assert "/family" in texts(relay)[1]
+    assert "What would you like to do?" in texts(relay)[1]
 
 
 @pytest.mark.parametrize(
@@ -267,15 +286,12 @@ def request_button(relay, label):
     )
 
 
-def test_all_day_request_approval_has_confirmation_and_resolves_request(relay):
-    button = request_button(relay, "Approve rest of day…")
+def test_request_card_has_only_focused_decision_actions(relay):
+    button = request_button(relay, "Approve 60 min")
     relay.adapter.handle(click(button))
-    assert not relay.setup.service.status("child")["unlimitedToday"]
-    confirmation = relay.transport.sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]
-    relay.adapter.handle(click(confirmation, update=2))
     status = relay.setup.service.status("child")
     assert status["request"]["status"] == "approved"
-    assert status["unlimitedToday"] and status["allowedUntil"] == "24:00"
+    assert status["effectiveDailyLimitMinutes"] == 120
 
 
 def test_denial_reason_and_parent_history_are_accessible(relay):
@@ -288,3 +304,21 @@ def test_denial_reason_and_parent_history_are_accessible(relay):
     assert status["request"]["decision"] == "Dinner time"
     relay.adapter.handle(message("/history child", update=3))
     assert "telegram:7" in texts(relay)[-1] and "applied" in texts(relay)[-1]
+
+
+def test_private_link_command_proves_sender_before_household_authorization(relay, monkeypatch):
+    claims = []
+    monkeypatch.setattr(
+        relay.gateway,
+        "claim_link",
+        lambda token, sender, label=None: claims.append((token, sender, label)),
+        raising=False,
+    )
+    update = message("/link " + "a" * 43, sender=91, chat=91)
+    update["message"]["chat"]["type"] = "private"
+    update["message"]["from"]["username"] = "parent"
+    relay.adapter.handle(update)
+    assert claims == [("a" * 43, "91", "@parent")]
+    assert relay.transport.sent[-1][1]["chat_id"] == 91
+    assert "confirm" in relay.transport.sent[-1][1]["text"]
+    assert relay.gateway.calls == []
