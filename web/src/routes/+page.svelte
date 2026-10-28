@@ -55,7 +55,8 @@
     notice = $state<Message | null>(null);
   let stream: EventSource | null = null,
     timer: ReturnType<typeof setInterval> | null = null;
-  let refreshing = false,
+  let refreshTask: Promise<void> | null = null;
+  let refreshAgain = false,
     generation = 0,
     stopped = false;
   const t = (key: Message) => translate(language, key);
@@ -96,8 +97,19 @@
     error = 'authExpired';
   }
   async function refresh() {
-    if (refreshing || !user || stopped) return;
-    refreshing = true;
+    if (!user || stopped) return;
+    refreshAgain = true;
+    if (!refreshTask) {
+      refreshTask = (async () => {
+        while (refreshAgain && user && !stopped) {
+          refreshAgain = false;
+          await refreshSnapshot();
+        }
+      })().finally(() => (refreshTask = null));
+    }
+    await refreshTask;
+  }
+  async function refreshSnapshot() {
     const current = generation;
     try {
       const result = await api.children();
@@ -106,7 +118,7 @@
         latestUser.language ??
         (await api.request('/api/v1/preferences', languagePreferences)).defaultLanguage;
       const latestEvents = view === 'history' ? await api.history(result) : null;
-      if (generation !== current || stopped) return;
+      if (generation !== current || stopped || refreshAgain) return;
       children = result;
       user = latestUser;
       language = latestLanguage;
@@ -118,8 +130,6 @@
       if (generation !== current || stopped) return;
       if (e instanceof ApiError && [401, 403].includes(e.status)) expire();
       else transportDown = true;
-    } finally {
-      refreshing = false;
     }
   }
   function startLive() {

@@ -300,6 +300,147 @@ def test_cookie_mutation_requires_same_origin_and_revoking_last_admin_fails(cent
     assert c.post("/api/v1/accounts/admin/revoke").status_code == 409
 
 
+@pytest.mark.parametrize("origin", [None, "https://other.test"])
+def test_cookie_delete_requires_origin_and_preserves_pending_link(central, origin):
+    c = central.client
+    c.post("/api/v1/me/connections/telegram/challenge")
+    session = c.headers.pop("Authorization")[7:]
+    c.cookies.set("family_session", session)
+    path = "/api/v1/me/connections/telegram/challenge"
+    assert c.delete(path, headers={"Origin": origin} if origin else {}).status_code == 403
+    assert central.store.get("link-challenges", "admin:telegram")
+    assert c.delete(path, headers={"Origin": "https://testserver"}).status_code == 200
+    assert central.store.get("link-challenges", "admin:telegram") is None
+
+
+@pytest.mark.parametrize("timezone", ["Not/AZone", "", "/etc/passwd"])
+def test_invalid_policy_timezone_is_validation_error(central, timezone):
+    policy = central.backend.policy("child")
+    policy.pop("revision")
+    policy.pop("setupComplete")
+    policy["timezone"] = timezone
+    response = central.client.put("/api/v1/children/child/policy?revision=1", json=policy)
+    assert response.status_code == 422
+    assert central.backend.policy("child")["revision"] == 1
+
+
+def test_host_tty_policy_cannot_be_silently_changed_from_parent_api(central):
+    policy = central.backend.policy("child")
+    policy.pop("revision")
+    policy.pop("setupComplete")
+    policy["policy"]["blockTTYLogin"] = False
+    response = central.client.put("/api/v1/children/child/policy?revision=1", json=policy)
+    assert response.status_code == 400
+    assert central.backend.policy("child")["policy"]["blockTTYLogin"]
+
+
+def test_reconnect_after_midnight_cannot_acknowledge_expired_daily_grant(central):
+    sync = agent(central)
+    central.backend.command("child", "add-time", {"minutes": 5}, "yesterday", "admin")
+    sync.exchange()  # Policy applied locally; its acknowledgement has not arrived.
+    central.setup.clock.advance(days=1)
+    sync.exchange()
+    sync.exchange()
+    assert central.store.get("commands", "yesterday")["status"] == "expired"
+    assert central.backend.status("child")["effectiveDailyLimitMinutes"] == 60
+
+
+@pytest.mark.parametrize("action,payload", [("mute", {}), ("block", {"days": 3})])
+def test_persistent_and_multiday_changes_still_apply_after_midnight(central, action, payload):
+    sync = agent(central)
+    central.backend.command("child", action, payload, "long-lived", "admin")
+    central.setup.clock.advance(days=1)
+    central.backend.reconcile_notifications()
+    assert central.store.get("commands", "long-lived")["status"] == "queued"
+    sync.exchange()
+    sync.exchange()
+    assert central.store.get("commands", "long-lived")["status"] == "applied"
+    status = central.backend.status("child")
+    assert status["muted" if action == "mute" else "blocked"]
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"request": {"status": "pending"}},
+        {
+            "request": {
+                "id": "invalid",
+                "created_at": "2026-10-18T12:00:00",
+                "expires_at": "2026-10-19T00:00:00",
+            }
+        },
+        {"application": []},
+        {"countedLockedSeconds": "unknown"},
+    ],
+)
+def test_malformed_device_status_is_rejected_before_persistence(central, status):
+    agent(central)
+    response = central.client.post(
+        "/api/v1/devices/device/sync",
+        json={"policyRevision": 1, "statuses": {"child": status}},
+        headers={"Authorization": "Bearer " + "device-secret" * 4},
+    )
+    assert response.status_code == 422
+    assert central.store.get("reports", "child/device") is None
+    assert central.backend.state("child").request is None
+
+
+def test_long_offline_history_cannot_starve_current_usage_reports(setup):
+    from datetime import timedelta
+
+    from family_controls.local_usage import LocalUsage
+    from family_controls.usage import Usage
+
+    today = setup.clock.now().date()
+    setup.service.usage = LocalUsage(setup.service)
+    for days in range(400, -1, -1):
+        setup.service.usage.save(Usage(user="child", day=today - timedelta(days=days), sequence=1))
+    reports = setup.service.usage.reports()
+    assert len(reports) == 100
+    assert reports[0]["day"] == today.isoformat()
+    assert reports[-1]["day"] == (today - timedelta(days=99)).isoformat()
+    for _, row in setup.repository.relay_items("usage/"):
+        if row["day"] > (today - timedelta(days=365)).isoformat():
+            setup.repository.relay_set(f"usage-ack/child/{row['day']}", row["sequence"])
+    assert [r["day"] for r in setup.service.usage.reports()] == [
+        today.isoformat(),
+        (today - timedelta(days=365)).isoformat(),
+        (today - timedelta(days=366)).isoformat(),
+    ]
+
+
+@pytest.mark.parametrize(
+    "hour,used,phase,homework,countdown",
+    [
+        (8, 0, "outside_schedule", False, 0),
+        (12, 3600, "idle", True, 3600),
+        (14, 3600, "expired", False, 0),
+        (17, 0, "idle", False, 3600),
+    ],
+)
+def test_parent_status_uses_schedule_and_unmetered_windows(
+    central, hour, used, phase, homework, countdown
+):
+    from family_controls.backend.models import ChildPolicy
+
+    policy = central.backend.policy("child")
+    policy.pop("revision")
+    policy.pop("setupComplete")
+    policy["policy"]["timeWindows"]["unmetered"] = {"ALL": ["12:00-13:00"]}
+    central.backend.set_policy("child", ChildPolicy.model_validate(policy), 1, "admin")
+    central.setup.clock.value = central.setup.clock.value.replace(hour=hour)
+    central.setup.enforcer.used["child"] = used
+    sync = agent(central)
+    sync.exchange()
+    sync.exchange()
+    status = central.backend.status("child")
+    assert status["phase"] == phase
+    assert status["insideUnmeteredWindow"] is homework
+    assert status["remainingCountdownSeconds"] == countdown
+    assert status["allowedUntil"] == (None if hour == 8 else "18:00")
+
+
 def test_event_cursors_are_independent_and_device_audiences_are_isolated(central):
     central.backend.command("child", "add-time", {"minutes": 5}, "stream", "admin")
     first = central.store.events("parents", 0)
@@ -504,6 +645,44 @@ def test_native_counter_reset_does_not_restore_consumed_shared_credit(central):
     central.setup.enforcer.used["child"] = 10
     sync.exchange()
     assert central.backend.status("child")["reportedUsedSeconds"] == 50
+
+
+@pytest.mark.parametrize("minutes", [90, 0])
+def test_set_remaining_uses_recorded_usage_even_when_over_budget(central, minutes):
+    sync = agent(central)
+    sync.exchange()
+    sync.exchange()
+    central.setup.enforcer.used["child"] = 10404
+    sync.exchange()
+    c = central.client
+    base = "/api/v1/children/child"
+    assert (
+        c.post(
+            base + "/commands/set-limit",
+            json={"minutes": 90},
+            headers={"Idempotency-Key": "original-budget"},
+        ).status_code
+        == 202
+    )
+    assert c.get(base + "/status").json()["remainingPlayTimeSeconds"] == 0
+    for operation in ("remaining", "remaining", "remaining-again"):
+        response = c.post(
+            base + "/commands/set-remaining",
+            json={"minutes": minutes},
+            headers={"Idempotency-Key": operation},
+        )
+        assert response.status_code == 202, response.text
+        status = response.json()
+        assert status["remainingPlayTimeSeconds"] == minutes * 60
+        assert status["effectiveDailyLimitMinutes"] * 60 == pytest.approx(10404 + minutes * 60)
+    sync.exchange()
+    sync.exchange()
+    status = c.get(base + "/status").json()
+    assert status["reportedUsedSeconds"] == 10404
+    assert status["remainingPlayTimeSeconds"] == minutes * 60
+    assert central.setup.service.status("child")["remainingPlayTimeSeconds"] == min(
+        300, minutes * 60
+    )
 
 
 def test_lost_accounting_state_is_rejected_without_reissuing_credit(central):

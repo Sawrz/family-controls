@@ -4,9 +4,11 @@ import socket
 import threading
 import time
 
+import httpx
 import pytest
 import uvicorn
 from family_controls.adapters.client import BackendClient
+from family_controls.adapters.http import RemoteError
 from family_controls.config import BackendConnection
 from family_controls.domain import Unavailable
 from test_backend import central as central
@@ -101,3 +103,50 @@ def test_failed_notification_replays_before_advancing_durable_cursor(setup, monk
     consume_events(Client(), setup.repository, deliver, stop)
     assert attempts == [0, 0] and delivered == [1, 2]
     assert setup.repository.relay_get("event-cursor") == {"id": 2}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("status", [400, 401, 403, 409])
+def test_backend_rejections_keep_their_status_for_clients(monkeypatch, stream, status):
+    client = BackendClient(BackendConnection(url="https://backend.test"))
+    monkeypatch.setattr(
+        client,
+        "transport",
+        lambda: httpx.MockTransport(
+            lambda request: httpx.Response(status, json={"error": "Request rejected"})
+        ),
+    )
+    with pytest.raises(RemoteError) as error:
+        if stream:
+            next(client.events("/events", 0))
+        else:
+            client.request("/command")
+    assert error.value.status == status
+
+
+@pytest.mark.parametrize("body", [[], {"error": []}, "not-json"])
+def test_malformed_rejection_body_still_preserves_http_status(monkeypatch, body):
+    client = BackendClient(BackendConnection(url="https://backend.test"))
+    monkeypatch.setattr(
+        client,
+        "transport",
+        lambda: httpx.MockTransport(lambda request: httpx.Response(403, json=body)),
+    )
+    with pytest.raises(RemoteError, match="Request rejected"):
+        client.request("/command")
+
+
+@pytest.mark.parametrize("data", ["data: []\n\n", ("data: " + "x" * 100000 + "\n") * 3])
+def test_event_payloads_are_bounded_and_must_be_objects(monkeypatch, data):
+    client = BackendClient(BackendConnection(url="https://backend.test"))
+    monkeypatch.setattr(
+        client,
+        "transport",
+        lambda: httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, text=data, headers={"Content-Type": "text/event-stream"}
+            )
+        ),
+    )
+    with pytest.raises(Unavailable):
+        next(client.events("/events", 0))

@@ -128,6 +128,7 @@ class AgentSettings(Model):
 
 class TimekprSettings(Model):
     timeoutSeconds: Positive = 5
+    workDir: str = "/var/lib/timekpr/work"
 
 
 class SystemSettings(Model):

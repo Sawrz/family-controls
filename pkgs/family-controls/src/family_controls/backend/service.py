@@ -17,6 +17,7 @@ from ..domain import (
     State,
     Unavailable,
     Window,
+    decide,
     duration,
     effective_policy,
     hhmm,
@@ -131,6 +132,8 @@ class Backend:
                 policy.timezone,
             ):
                 raise InvalidCommand("Assignments and timezone are deployment settings")
+            if old["policy"].get("blockTTYLogin", True) != policy.policy.blockTTYLogin:
+                raise InvalidCommand("TTY login restrictions are deployment settings")
             result = {"revision": revision + 1, "setupComplete": True, **policy.model_dump()}
             self.store.put("policies", child, result)
             self.emit(
@@ -317,7 +320,7 @@ class Backend:
                 command,
                 actor,
                 now,
-                Observation(remaining, 86400, now),
+                Observation(remaining, 86400, now, {"playSeconds": status["reportedUsedSeconds"]}),
             )
             policy["revision"] += 1
             state.revision = policy["revision"]
@@ -331,7 +334,7 @@ class Backend:
                 "actor": actor,
                 "fingerprint": fingerprint,
                 "createdAt": now.isoformat(),
-                "expiresAt": midnight_after(now).isoformat(),
+                "expiresAt": self.command_expiry(action, payload, now),
                 "revision": policy["revision"],
                 "status": "queued",
             }
@@ -391,6 +394,12 @@ class Backend:
         effective = effective_policy(
             allowed, homework, user.playTime.dailyLimitMinutes * 60, state, now
         )
+        decision = decide(
+            effective,
+            Observation(remaining if remaining is not None else 86400, 86400, now),
+            now,
+            0,
+        )
 
         def windows(values: Sequence[Window]) -> list[str]:
             return [f"{hhmm(w.start)}–{hhmm(w.end)}" for w in values]
@@ -411,9 +420,7 @@ class Backend:
             if state.blocked_until
             else "unknown"
             if not online
-            else "expired"
-            if remaining == 0
-            else "idle",
+            else decision.phase,
             "connectivity": "online" if online else "offline",
             "lastSeen": last_seen,
             "application": {
@@ -427,7 +434,10 @@ class Backend:
             "unlimitedToday": state.unlimited,
             "effectiveDailyLimitMinutes": limit / 60 if limit is not None else None,
             "remainingPlayTimeSeconds": remaining,
-            "remainingCountdownSeconds": remaining,
+            "remainingCountdownSeconds": decision.remaining if online else None,
+            "insideAllowedWindow": decision.inside,
+            "insideUnmeteredWindow": decision.homework,
+            "allowedUntil": hhmm(decision.cutoff) if decision.cutoff is not None else None,
             "reportedUsedSeconds": balance["reportedUsedSeconds"],
             "countedLockedSeconds": sum(
                 d["status"].get("countedLockedSeconds", 0) for d in devices
@@ -464,14 +474,32 @@ class Backend:
                 ):
                     self.store.put("child-state", child, asdict(state))
                     self.emit("request.changed", {"child": child, "request": asdict(state.request)})
-                for command in self.store.pending_commands(child):
-                    if datetime.fromisoformat(command["expiresAt"]) <= self.clock.now():
-                        command["status"] = "expired"
-                        self.store.put("commands", command["operationId"], command)
-                        self.emit(
-                            "command.expired",
-                            {"child": child, "operationId": command["operationId"]},
-                        )
+                self.expire_commands(child)
+
+    def expire_commands(self, child: str) -> None:
+        """Expire undelivered commands inside the caller's transaction before acknowledgement."""
+        for command in self.store.pending_commands(child):
+            # Derive the scope for older receipts too: persistent changes and
+            # multi-day blocks must not expire with a daily budget exception.
+            created = datetime.fromisoformat(command["createdAt"]).astimezone(
+                ZoneInfo(self.policy(child)["timezone"])
+            )
+            expires = self.command_expiry(command["action"], command["payload"], created)
+            if expires is not None and datetime.fromisoformat(expires) <= self.clock.now():
+                command["status"] = "expired"
+                self.store.put("commands", command["operationId"], command)
+                self.emit(
+                    "command.expired",
+                    {"child": child, "operationId": command["operationId"]},
+                )
+
+    @staticmethod
+    def command_expiry(action: str, payload: dict, now: datetime) -> str | None:
+        """Match delivery expiry to the lifetime of the committed change."""
+        if action in {"mute", "unmute", "unblock"}:
+            return None
+        days = (payload.get("days") or 1) if action == "block" else 1
+        return midnight_after(now + timedelta(days=days - 1)).isoformat()
 
     def history(self, child: str) -> list[dict]:
         self.policy(child)
@@ -509,6 +537,7 @@ class Backend:
                 self.usage.accept(child, device, usage, self.local_now(child).date())
             policies = {}
             for user, child in assignments.items():
+                self.expire_commands(child)
                 policy, state = self.policy(child), self.state(child)
                 status = report.statuses.get(user, {})
                 incoming = status.get("request")

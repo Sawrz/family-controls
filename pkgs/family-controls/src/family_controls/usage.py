@@ -1,10 +1,10 @@
 """Validated cumulative usage and allocation contracts shared by agents and server."""
 
-from datetime import date, datetime
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 
 from .config import Identifier, Model
 
@@ -26,7 +26,7 @@ class Usage(Model):
     playSeconds: Seconds = 0
     nativeSeconds: Seconds = 0
     lockedSeconds: Seconds = 0
-    observedAt: datetime | None = None
+    observedAt: AwareDatetime | None = None
     activeSeconds: Seconds = 0
     unmeteredSeconds: Seconds = 0
     observedSeconds: Seconds = 0

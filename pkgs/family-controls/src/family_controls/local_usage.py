@@ -1,7 +1,7 @@
 """Durable local counters and credit enforcement for a centrally managed child."""
 
 from dataclasses import asdict, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -38,7 +38,9 @@ class LocalUsage:
     def observe(self, user: str, observation: Observation, policy: Policy) -> None:
         """Sample known intervals; restarts, suspend and long gaps remain unknown."""
         now, clock = self.service.clock.now(), self.service.clock
-        value = self.read(user)
+        if observation.observed_at.date() != now.date():
+            raise Unavailable("Usage observation belongs to another policy day; retrying")
+        value = self.read(user, now.date())
         native = observation.raw.get("playSeconds")
         if not isinstance(native, int) or isinstance(native, bool) or native < 0:
             raise Unavailable("Enforcer does not provide cumulative usage")
@@ -93,11 +95,18 @@ class LocalUsage:
     def reports(self) -> list[dict]:
         """Resend unacknowledged snapshots, including completed offline days."""
         rows = self.service.repository.relay_items("usage/")
+        today = self.service.clock.now().date()
+        oldest = (today - timedelta(days=366)).isoformat()
         result = []
         for _, row in rows:
+            # The backend accepts at most a year of historical reports. Keep older
+            # snapshots locally without letting them prevent current synchronization.
+            if not oldest <= row["day"] <= today.isoformat():
+                continue
             ack = self.service.repository.relay_get(f"usage-ack/{row['user']}/{row['day']}", -1)
-            if row["sequence"] > ack or row["day"] == self.service.clock.now().date().isoformat():
+            if row["sequence"] > ack or row["day"] == today.isoformat():
                 result.append(row)
+        result.sort(key=lambda row: row["day"], reverse=True)
         return result[:100]
 
     def accept(self, user: str, policy: dict, reported_request: dict | None = None) -> None:

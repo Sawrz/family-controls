@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -103,6 +104,28 @@ def test_set_remaining_requires_recent_usage(setup):
     setup.clock.advance(minutes=1)
     with pytest.raises(Unavailable):
         command(setup, "set-remaining", {"minutes": 10})
+
+
+def test_set_remaining_includes_overrun_and_locked_usage(setup):
+    setup.enforcer.used["child"] = 4000
+    state = setup.repository.load("child", setup.clock.now())
+    state.locked_seconds = 120
+    with setup.repository.transaction():
+        setup.repository.save("child", state)
+    setup.service.reconcile("child")
+    assert setup.service.status("child")["remainingPlayTimeSeconds"] == 0
+    result = command(setup, "set-remaining", {"minutes": 20})
+    assert result["remainingPlayTimeSeconds"] == 1200
+    assert result["effectiveDailyLimitMinutes"] * 60 == 5320
+
+
+@pytest.mark.parametrize("used", [None, True, -1])
+def test_set_remaining_rejects_missing_or_invalid_consumed_counter(setup, used):
+    setup.service.observations["child"] = replace(
+        setup.service.observations["child"], raw={"playSeconds": used}
+    )
+    with pytest.raises(Unavailable, match="Measured usage"):
+        command(setup, "set-remaining", {"minutes": 20})
 
 
 def test_unlimited_expiry_restores_budget(setup):

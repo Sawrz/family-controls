@@ -474,12 +474,15 @@ def transition(
             raise Unavailable("Fresh usage is required; retry after the device reconnects")
         if state.unlimited:
             raise Conflict("Restore or set today's limit before adjusting remaining time")
-        difference = (
-            amount - observation.play_left
-            if action == "set-remaining"
-            else -min(amount, observation.play_left)
-        )
-        state.delta_seconds += difference
+        if action == "set-remaining":
+            used = observation.raw.get("playSeconds")
+            if not isinstance(used, int) or isinstance(used, bool) or used < 0:
+                raise Unavailable("Measured usage is required to set remaining time")
+            # A zero balance hides overrun. Set the total from measured usage,
+            # including separately charged locked time, rather than adding to it.
+            state.delta_seconds = used + state.locked_seconds + amount - base
+        else:
+            state.delta_seconds -= min(amount, observation.play_left)
     elif action == "set-limit":
         state.delta_seconds, state.unlimited = amount - base, False
     elif action in {"unlimited-today", "allow-today"}:

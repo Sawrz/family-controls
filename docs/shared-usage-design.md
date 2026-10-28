@@ -66,11 +66,24 @@ show pending delivery instead of claiming all devices have stopped.
 
 ## Durable usage
 
-Metered usage uses Timekpr’s explicit consumed-time counter. Live remaining time
-and configuration readback are not an atomic snapshot and must not be subtracted
-to infer consumption. Reports can lag its counter flush; unreported usage remains
-reserved. Surrender limits the return to live spendable credit and newly issued
-credit that has not yet been installed.
+Metered usage reads `PLAYTIME_SPENT_DAY` and `LAST_CHECKED` together from
+Timekpr’s saved work file (`timekpr.workDir`, default `/var/lib/timekpr/work`).
+Its D-Bus spent counter omits the date and can still contain yesterday’s usage
+after midnight. A previous-day file contributes zero to today; future-dated,
+missing, incomplete or invalid files are retried without changing accounting.
+Observations crossing a policy-day boundary are also retried. Live remaining time
+and configuration readback must not be subtracted to infer consumption.
+Reports can lag the counter flush; unreported usage remains reserved. Surrender
+limits the return to live spendable credit and newly issued credit that has not
+yet been installed. Same-day counter resets preserve already charged usage.
+
+This prevents new rollover errors; it does not rewrite existing usage ledgers.
+For an already affected day, a parent can set the remaining time to the intended
+balance after deploying the corrected backend. Setting remaining time calculates
+the total as recorded usage plus the requested remainder, even when usage exceeds
+the old allowance. That restores access but leaves historical usage unchanged.
+On older backends, set the **total** to recorded usage plus the intended remaining
+time instead; their remaining-time command can undergrant an overdrawn budget.
 
 Store reported usage independently of the latest status snapshot and independently
 of command history. Use validated, versioned reports with stable identifiers and

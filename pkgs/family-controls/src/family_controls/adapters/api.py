@@ -88,7 +88,7 @@ def create_app(backend: Backend, accounts: Accounts, oidc: OIDC) -> FastAPI:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         # Bound parsing before framework validation, including streamed/chunked bodies.
-        if request.method in {"POST", "PUT", "PATCH"}:
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             length = request.headers.get("content-length")
             if length and (not length.isdecimal() or int(length) > 262144):
                 return JSONResponse({"error": "Request too large"}, status_code=413)

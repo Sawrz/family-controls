@@ -245,6 +245,23 @@ in
         assert status()["pendingRequest"] is None
         backend.succeed("runuser -u family-controls-telegram -- env PYTHONPATH=${../pkgs/family-controls/src} python3 -m pytest -q -p no:cacheprovider ${./relay_vm.py} -k pending_request")
 
+    with subtest("live recurring policy updates reach native enforcement"):
+        original = api("/api/v1/children/child/policy")
+        changed = json.loads(json.dumps(original))
+        revision = changed.pop("revision")
+        changed.pop("setupComplete")
+        changed["policy"].update(trackInactive=True, countLockedTime=False, lockoutAction="lock")
+        changed["policy"]["playTime"]["activities"] = [".*live-policy-game.*[Live policy game]"]
+        api(f"/api/v1/children/child/policy?revision={revision}", changed, "PUT")
+        wait_budget(60)
+        info = machine.succeed("timekpra --userinfo child")
+        assert "TRACK_INACTIVE: True" in info and "LOCKOUT_TYPE: lock" in info, info
+        assert "live-policy-game" in info and "Live policy game" in info, info
+        original.pop("revision")
+        original.pop("setupComplete")
+        api(f"/api/v1/children/child/policy?revision={revision + 1}", original, "PUT")
+        wait_budget(60)
+
     with subtest("real locked-session accounting and activity enforcement"):
         sessions = machine.succeed("loginctl show-user child --property=Sessions --value").split()
         session = next(s for s in sessions if machine.succeed(f"loginctl show-session {s} --property=Type --value").strip() == "x11")

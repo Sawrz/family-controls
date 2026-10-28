@@ -336,6 +336,17 @@ are retained for replay and duplicate protection; monitor disk usage. Agent audi
 retention defaults to 365 days. The backend is a single-process SQLite service,
 not a horizontally replicated deployment.
 
+Timekpr uses informational logging. Its daemon log rotates daily or when larger
+than 20 MiB at a rotation check, retaining seven files with delayed compression.
+Existing large logs are not deleted by the application. Agent synchronization
+prioritizes today’s usage and submits historical reports only within the backend’s
+366-day reporting interval; older local records remain intact.
+
+Parent edits to activities, inactive tracking and lockout behavior are applied and
+verified live. Console-login restrictions (`blockTTYLogin`), account assignments
+and policy timezone are host/deployment settings and cannot be changed through
+the parent policy editor.
+
 After activation, check service journals, device approval and `policyDelivery`,
 then test a small extension, child request, five/one-minute warning and offline
 recovery. VM tests exercise real Timekpr and backend services, but cannot verify

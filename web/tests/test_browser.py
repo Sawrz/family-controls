@@ -101,11 +101,61 @@ def test_change_scope_tracks_operation_and_block_duration(signed_in):
     expect(page.get_by_role("heading", name="Today-only change")).to_be_visible()
     page.get_by_label("Block duration", exact=True).select_option("days")
     expect(page.get_by_role("heading", name="Block for selected days")).to_be_visible()
-    page.get_by_label("Block duration", exact=True).select_option("indefinite")
+    expect(page.get_by_label("Block duration", exact=True).locator("option")).to_have_count(2)
+    page.get_by_label("Change", exact=True).select_option("unmute")
     page.get_by_label("Language", exact=True).select_option("de")
     expect(page.get_by_role("heading", name="Dauerhafte Änderung")).to_be_visible()
     page.set_viewport_size({"width": 390, "height": 844})
     capture(page, "persistent-mobile.png")
+
+
+def test_set_remaining_from_overdrawn_budget_matches_preview(signed_in, household):
+    page = signed_in
+    household.service.enforcer.used["mia"] = 174 * 60
+    apply_device(household)
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(child_row(page).get_by_text("0 min", exact=True)).to_be_visible()
+    child_row(page).get_by_role("button", name="Change time").click()
+    page.get_by_label("Change", exact=True).select_option("set-remaining")
+    page.get_by_label("Custom duration").fill("90")
+    preview = page.locator(".change-preview")
+    expect(preview).to_contain_text("90 min → 264 min")
+    expect(preview).to_contain_text("0 → 90 min")
+    capture(page, "remaining-overdrawn-desktop.png")
+    page.set_viewport_size({"width": 390, "height": 844})
+    capture(page, "remaining-overdrawn-mobile.png")
+    page.get_by_role("button", name="Apply change", exact=True).click()
+    expect(page.get_by_role("status")).to_contain_text("Waiting for computer")
+    apply_device(household)
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(child_row(page).get_by_text("90 min", exact=True)).to_be_visible()
+    status = household.backend.status("mia")
+    assert status["reportedUsedSeconds"] == 174 * 60
+    assert status["remainingPlayTimeSeconds"] == 90 * 60
+
+
+def test_successful_change_refreshes_again_after_an_older_snapshot(signed_in, household):
+    page = signed_in
+    child_row(page).get_by_role("button", name="Change time").click()
+    page.get_by_label("Change", exact=True).select_option("set-remaining")
+    page.get_by_label("Custom duration").fill("90")
+    held = []
+
+    def hold_snapshot(route):
+        held.append((route, route.fetch()))
+
+    page.route("**/children/mia/status", hold_snapshot, times=1)
+    with page.expect_request("**/children/mia/status"):
+        page.get_by_role("button", name="Refresh", exact=True).click()
+    page.get_by_role("button", name="Apply change", exact=True).click()
+    expect(page.get_by_role("status")).to_contain_text("Waiting for computer")
+    assert held
+    route, old_response = held[0]
+    route.fulfill(response=old_response)
+    # No manual refresh or ten-second polling tick is needed after the mutation.
+    expect(child_row(page).get_by_text("90 min", exact=True)).to_be_visible(timeout=5000)
+    # Another remaining-time edit waits for the device to acknowledge this policy.
+    expect(page.get_by_role("button", name="Apply change", exact=True)).to_be_disabled()
 
 
 def test_request_decision_with_custom_duration(signed_in, household):
@@ -294,7 +344,10 @@ def test_competing_request_decision_is_reported_without_a_second_grant(signed_in
     assert household.service.status("mia")["effectiveDailyLimitMinutes"] == 100
 
 
-def test_oidc_callback_returns_to_app_and_consumes_path_scoped_cookie(page, household, monkeypatch):
+@pytest.mark.parametrize("storage_blocked", [False, True])
+def test_oidc_callback_returns_to_app_and_consumes_path_scoped_cookie(page, household, monkeypatch, storage_blocked):
+    if storage_blocked:
+        page.add_init_script("Object.defineProperty(window, 'localStorage', {get() { throw new DOMException('Blocked', 'SecurityError'); }});")
     household.metadata["oidc"] = {"login": True, "registration": False}
     household.metadata["providers"] = [{"id": "test", "label": "Test identity"}]
     household.runtime.write_text(json.dumps(household.metadata))
@@ -372,7 +425,7 @@ def test_policy_validation_error_keeps_input_and_advanced_settings(signed_in, ho
     field.fill("09:00-18:00")
     page.get_by_text("Advanced enforcement settings", exact=True).click()
     page.get_by_label("Tracked process names (one per line)", exact=True).fill("game-one\ngame-two")
-    page.get_by_label("Exclude inactive time", exact=True).check()
+    page.get_by_label("Count inactive time", exact=True).check()
     page.get_by_label("Action when time runs out", exact=True).select_option("lock")
     page.get_by_role("button", name="Save routine").click()
     expect(page.get_by_role("status")).to_contain_text("Saved")

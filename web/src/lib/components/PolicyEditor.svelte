@@ -134,7 +134,7 @@
         )}</label
       >
       <label class="check"
-        ><input type="checkbox" bind:checked={draft.policy.blockTTYLogin} />{t(
+        ><input type="checkbox" checked={draft.policy.blockTTYLogin} disabled />{t(
           'blockTTYLogin',
         )}</label
       >

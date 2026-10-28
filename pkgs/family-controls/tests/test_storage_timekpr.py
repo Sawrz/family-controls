@@ -1,11 +1,34 @@
 import json
 import sqlite3
 from contextlib import closing
+from datetime import datetime
+from pathlib import Path
 
 import pytest
+from family_controls.adapters.backend_sqlite import BackendStore
 from family_controls.adapters.sqlite import Repository
 from family_controls.adapters.timekpr import Timekpr, render_main
+from family_controls.backend.usage import UsageLedger
 from family_controls.domain import Policy, Unavailable, Window
+from family_controls.local_usage import LocalUsage
+
+
+@pytest.fixture
+def saved_usage(setup, tmp_path):
+    setup.config.timekpr.workDir = str(tmp_path / "timekpr-work")
+    Path(setup.config.timekpr.workDir).mkdir()
+
+    def write(seconds, checked_at=None):
+        checked_at = checked_at or setup.clock.now().replace(tzinfo=None).isoformat(sep=" ")
+        path = Path(setup.config.timekpr.workDir) / "child.time"
+        path.write_text(
+            f"[child]\nLAST_CHECKED = {checked_at}\n"
+            f"[child.PLAYTIME]\nPLAYTIME_SPENT_DAY = {seconds}\n"
+        )
+        return path
+
+    write(1)
+    return write
 
 
 def test_legacy_migration_preserves_records_and_backs_up(tmp_path, clock):
@@ -64,6 +87,9 @@ class Bus:
             "ACTUAL_PLAYTIME_LEFT_DAY": 59,
             "PLAYTIME_SPENT_DAY": 1,
             "ACTUAL_TIME_LEFT_CONTINUOUS": 60,
+            "TRACK_INACTIVE": False,
+            "LOCKOUT_TYPE": "kill",
+            "PLAYTIME_ACTIVITIES": [["test-game", ""]],
         }
         self.users = {}
         self.initial = dict(self.values)
@@ -92,8 +118,53 @@ class Bus:
         self.select(user)
         return (0, "ok", self.values)
 
+    def setTrackInactive(self, user, value, timeout):
+        self.select(user)
+        self.values["TRACK_INACTIVE"] = value
+        self.calls.append(("inactive", user, value))
+        return (0, "ok")
 
-def test_dbus_empty_schedule_and_readback(setup):
+    def setLockoutType(self, user, value, wake_from, wake_to, timeout):
+        self.select(user)
+        self.values["LOCKOUT_TYPE"] = value
+        self.calls.append(("lockout", user, value))
+        return (0, "ok")
+
+    def setPlayTimeActivities(self, user, value, timeout):
+        self.select(user)
+        if not self.drift:
+            self.values["PLAYTIME_ACTIVITIES"] = value
+        self.calls.append(("activities", user, value))
+        return (0, "ok")
+
+
+def test_live_activity_and_session_changes_are_verified_without_resetting_usage(setup):
+    bus = Bus()
+    adapter = Timekpr(setup.config, setup.clock, lambda: bus)
+    policy = Policy((Window(0, 86400),), (), 3600, False)
+    adapter.apply("child", policy, setup.clock.now())
+    cfg = setup.config.managedUsers["child"]
+    cfg.playTime.activities = [".*new-game.*[New game]", '.*other.*("Other")']
+    cfg.trackInactive = True
+    cfg.killSessions = False
+    bus.calls.clear()
+    adapter.apply("child", policy, setup.clock.now())
+    assert bus.calls == [
+        ("inactive", "child", True),
+        ("lockout", "child", "terminate"),
+        ("activities", "child", [[".*new-game.*", "New game"], [".*other.*", "Other"]]),
+    ]
+    assert bus.values["PLAYTIME_SPENT_DAY"] == 1
+    bus.calls.clear()
+    adapter.apply("child", policy, setup.clock.now())
+    assert not bus.calls
+    bus.drift = True
+    cfg.playTime.activities = [".*"]
+    with pytest.raises(Unavailable, match="settings differ"):
+        adapter.apply("child", policy, setup.clock.now())
+
+
+def test_dbus_empty_schedule_and_readback(setup, saved_usage):
     bus = Bus()
     adapter = Timekpr(setup.config, setup.clock, lambda: bus)
     adapter.apply("child", Policy((), (), 0, True), setup.clock.now())
@@ -186,7 +257,7 @@ def test_expired_relay_prompts_and_actor_claims_are_pruned_but_receipts_remain(s
     assert repo.history("child")[0]["outcome"] == "applied"
 
 
-def test_limit_readback_with_stale_remaining_never_fabricates_usage(setup):
+def test_limit_readback_with_stale_remaining_never_fabricates_usage(setup, saved_usage):
     bus = Bus()
     bus.values.update(
         {
@@ -197,6 +268,147 @@ def test_limit_readback_with_stale_remaining_never_fabricates_usage(setup):
         }
     )
     adapter = Timekpr(setup.config, setup.clock, lambda: bus)
+    saved_usage(17)
     assert adapter.observe("child").raw["playSeconds"] == 17
     bus.values["ACTUAL_PLAYTIME_LEFT_DAY"] = 86383
     assert adapter.observe("child").raw["playSeconds"] == 17
+
+
+@pytest.mark.parametrize(
+    "last_checked,restart",
+    [
+        ("2026-10-27 23:59:59", False),
+        ("2026-10-27 23:59:59", True),
+        ("2026-12-31 23:59:59", False),
+        ("2026-10-25 23:59:59", False),
+    ],
+    ids=["delayed-reset", "agent-restart", "year-rollover", "after-dst"],
+)
+def test_delayed_native_reset_does_not_charge_yesterday_to_today(
+    setup, saved_usage, last_checked, restart
+):
+    clock = setup.clock
+    clock.value = datetime.fromisoformat(last_checked).replace(tzinfo=clock.now().tzinfo)
+    bus = Bus()
+    bus.values["PLAYTIME_SPENT_DAY"] = 10400
+    saved_usage(10400, last_checked)
+    adapter = Timekpr(setup.config, clock, lambda: bus)
+    usage = LocalUsage(setup.service)
+    policy = Policy((), (), 5400, False)
+    usage.observe("child", adapter.observe("child"), policy)
+    yesterday = usage.read("child")
+    assert yesterday.playSeconds == 10400
+
+    clock.advance(seconds=2)
+    if restart:
+        usage = LocalUsage(setup.service)
+    usage.observe("child", adapter.observe("child"), policy)
+    assert usage.read("child").playSeconds == 0
+    assert usage.cap("child", clock.now()) == 0
+
+    # The file and D-Bus response may come from different sides of the reset.
+    saved_usage(0)
+    usage.observe("child", adapter.observe("child"), policy)
+    saved_usage(4)
+    usage.observe("child", adapter.observe("child"), policy)
+    usage.observe("child", adapter.observe("child"), policy)
+    assert usage.read("child").playSeconds == 4
+    assert usage.read("child", yesterday.day) == yesterday
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "",
+        "[child]\nLAST_CHECKED = invalid\n[child.PLAYTIME]\nPLAYTIME_SPENT_DAY = 10\n",
+        "[child]\nLAST_CHECKED = 2026-10-18 12:00:00\n[child.PLAYTIME]\nPLAYTIME_SPENT_DAY = -1\n",
+        "[child]\nLAST_CHECKED = 2026-10-19 12:00:00\n[child.PLAYTIME]\nPLAYTIME_SPENT_DAY = 10\n",
+        "[child]\nLAST_CHECKED = 2026-10-18 12:00:00\n[child.PLAYTIME]\n",
+    ],
+    ids=[
+        "missing",
+        "empty-write",
+        "invalid-date",
+        "negative-counter",
+        "future-day",
+        "partial-write",
+    ],
+)
+def test_undated_or_invalid_usage_never_falls_back_to_dbus(setup, saved_usage, content):
+    path = saved_usage(1)
+    if content is None:
+        path.unlink()
+    else:
+        path.write_text(content)
+    bus = Bus()
+    with pytest.raises(Unavailable):
+        Timekpr(setup.config, setup.clock, lambda: bus).observe("child")
+
+
+def test_observation_crossing_midnight_is_retried_before_accounting(setup):
+    usage = LocalUsage(setup.service)
+    setup.clock.value = setup.clock.now().replace(hour=23, minute=59, second=59)
+    observation = setup.enforcer.observe("child")
+    setup.clock.advance(seconds=2)
+    with pytest.raises(Unavailable, match="policy day"):
+        usage.observe("child", observation, Policy((), (), 5400, False))
+    assert setup.repository.relay_items("usage/") == []
+
+
+def test_fresh_allowance_is_allocated_while_native_reset_is_pending(setup, saved_usage, tmp_path):
+    saved_usage(10400, "2026-10-17 23:59:59")
+    bus = Bus()
+    bus.values["PLAYTIME_SPENT_DAY"] = 10400
+    adapter = Timekpr(setup.config, setup.clock, lambda: bus)
+    usage = LocalUsage(setup.service)
+    policy = Policy((), (), 5400, False)
+    usage.observe("child", adapter.observe("child"), policy)
+    report = usage.read("child")
+    report.policyRevision = 1
+    report.needsTime = True
+    store = BackendStore(str(tmp_path / "backend.sqlite"))
+    try:
+        ledger = UsageLedger(store)
+        with store.transaction():
+            ledger.accept("child", "device", report, report.day)
+            allocation = ledger.allocate("child", "device", report, report.day, 5400, 1)
+        assert allocation.reportedUsedSeconds == 0
+        assert allocation.issuedSeconds == 300
+        assert allocation.availableSeconds + allocation.reservedSeconds == 5400
+        report.issuedSeconds = allocation.issuedSeconds
+        usage.save(report)
+        assert usage.cap("child", setup.clock.now()) == 300
+
+        saved_usage(4)
+        usage.observe("child", adapter.observe("child"), policy)
+        report = usage.read("child")
+        with store.transaction():
+            ledger.accept("child", "device", report, report.day)
+        balance = ledger.balance("child", report.day, 5400)
+        assert balance["reportedUsedSeconds"] == 4
+        assert balance["availableSeconds"] + balance["reservedSeconds"] == 5396
+        assert report.issuedSeconds - report.playSeconds == 296
+    finally:
+        store.close()
+
+
+def test_work_file_changed_during_read_is_retried(setup, saved_usage, monkeypatch):
+    from family_controls.adapters import timekpr
+
+    saved_usage(1)
+    fstat = timekpr.os.fstat
+    calls = 0
+
+    def changed(fileno):
+        nonlocal calls
+        stat = fstat(fileno)
+        calls += 1
+        if calls == 1:
+            saved_usage(100)
+        return stat
+
+    monkeypatch.setattr(timekpr.os, "fstat", changed)
+    bus = Bus()
+    with pytest.raises(Unavailable, match="changed while reading"):
+        Timekpr(setup.config, setup.clock, lambda: bus).observe("child")

@@ -64,10 +64,8 @@
   const left = $derived(
     fresh && !child.status.unlimitedToday ? child.status.remainingPlayTimeSeconds! / 60 : null,
   );
-  // A zero balance does not reveal how far usage exceeded a reduced allowance.
-  const consumed = $derived(
-    total != null && left != null && left > 0 ? Math.max(0, total - left) : null,
-  );
+  // The ledger retains usage beyond the allowance; a clamped balance does not.
+  const consumed = $derived(fresh ? child.status.reportedUsedSeconds / 60 : null);
   const preview = $derived.by(() => {
     if (minutes == null) return { total: null, remaining: null };
     if (effective === 'set-limit')
@@ -77,21 +75,23 @@
       };
     if (total == null || left == null) return { total: null, remaining: null };
     if (effective === 'add-time')
-      return { total: total + minutes, remaining: left > 0 ? left + minutes : null };
+      return {
+        total: total + minutes,
+        remaining: consumed == null ? null : Math.max(0, total + minutes - consumed),
+      };
     if (effective === 'deduct-time')
       return { total: total - Math.min(minutes, left), remaining: Math.max(0, left - minutes) };
     if (effective === 'set-remaining')
       return {
-        total: total + minutes - left,
-        remaining: left > 0 || minutes === 0 ? minutes : null,
+        total: consumed == null ? null : consumed + minutes,
+        remaining: minutes,
       };
     return { total: null, remaining: null };
   });
   const heading = $derived<Message>(
     request
       ? 'review'
-      : ['mute', 'unmute', 'unblock'].includes(effective) ||
-          (effective === 'block' && duration === 'indefinite')
+      : ['mute', 'unmute', 'unblock'].includes(effective)
         ? 'persistentTitle'
         : effective === 'block' && duration === 'days'
           ? 'daysTitle'
@@ -201,7 +201,7 @@
             bind:value={duration}
             onchange={() => (confirmed = false)}
             ><option value="today">{t('todayOnly')}</option><option value="days">{t('days')}</option
-            ><option value="indefinite">{t('indefinite')}</option></select
+            ></select
           ></label
         >{#if duration === 'days'}<label
             >{t('days')}<input

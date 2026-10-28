@@ -31,10 +31,13 @@ class BackendClient:
             raise Unavailable("Backend temporarily unavailable")
         if response.status_code >= 300:
             try:
-                message = response.json().get("error", "Request rejected")
+                body = response.json()
+                message = body.get("error") if isinstance(body, dict) else None
             except ValueError:
-                message = "Request rejected"
-            raise RemoteError(message, response.status_code)
+                message = None
+            raise RemoteError(
+                message if isinstance(message, str) else "Request rejected", response.status_code
+            )
 
     def request(
         self,
@@ -59,6 +62,8 @@ class BackendClient:
                 if not isinstance(result, dict):
                     raise Unavailable("Invalid backend response")
                 return result
+        except RemoteError:
+            raise
         except (httpx.HTTPError, ValueError) as exc:
             raise Unavailable("Backend connection or TLS verification failed") from exc
 
@@ -80,16 +85,26 @@ class BackendClient:
                 if not response.headers.get("content-type", "").startswith("text/event-stream"):
                     raise Unavailable("Backend did not return an event stream")
                 data = []
+                size = 0
                 for line in response.iter_lines():
                     if len(line) > 262144:
                         raise Unavailable("Event exceeds size limit")
                     if line.startswith(":"):
                         yield None
                     elif line.startswith("data:"):
+                        size += len(line)
+                        if size > 262144:
+                            raise Unavailable("Event exceeds size limit")
                         data.append(line[5:].strip())
                     elif not line and data:
-                        yield json.loads("\n".join(data))
+                        event = json.loads("\n".join(data))
+                        if not isinstance(event, dict):
+                            raise Unavailable("Invalid backend event")
+                        yield event
                         data = []
+                        size = 0
+        except RemoteError:
+            raise
         except (httpx.HTTPError, ValueError) as exc:
             raise Unavailable("Event connection interrupted") from exc
 

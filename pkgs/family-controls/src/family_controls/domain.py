@@ -202,6 +202,12 @@ def decide(policy: Policy, observation: Observation, now: datetime, warning: int
     if window is None:
         return Decision("blocked" if policy.blocked else "outside_schedule", 0, False, False, None)
     remaining = min(window.end - second, max(0, observation.allowed_left))
+    if homework:
+        # Re-evaluate at the end of unmetered access; the remaining budget may
+        # already be exhausted when metering resumes.
+        remaining = min(
+            remaining, min(w.end - second for w in policy.homework if w.contains(second))
+        )
     if policy.limit_seconds is not None and not homework:
         remaining = min(remaining, max(0, observation.play_left))
     phase = "expired" if remaining == 0 else "countdown_active" if remaining <= warning else "idle"

@@ -7,7 +7,12 @@
   let language = $state<Language>('en');
   let message = $state<Message>('oidcProgress');
   onMount(() => {
-    language = localStorage.getItem('family.language') === 'de' ? 'de' : 'en';
+    try {
+      language = localStorage.getItem('family.language') === 'de' ? 'de' : 'en';
+    } catch {
+      // Browser storage is optional; the sign-in itself uses an HttpOnly cookie.
+      language = navigator.language.startsWith('de') ? 'de' : 'en';
+    }
     document.documentElement.lang = language;
     const url = new URL(location.href);
     // Clear authorization codes from the visible history before any asynchronous work.

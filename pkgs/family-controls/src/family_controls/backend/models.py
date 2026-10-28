@@ -3,10 +3,18 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from ..config import Identifier, Minutes, Model, User, Windows
-from ..usage import Usage
+from ..usage import Seconds, Usage
 
 Role = Literal["admin", "parent"]
 Key = Annotated[str, Field(min_length=1, max_length=128)]
@@ -89,9 +97,12 @@ class ChildPolicy(Model):
 
     @model_validator(mode="after")
     def timezone_exists(self) -> "ChildPolicy":
-        from zoneinfo import ZoneInfo
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-        ZoneInfo(self.timezone)
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("Unknown policy timezone") from exc
         if len({a.device for a in self.assignments}) != len(self.assignments):
             raise ValueError("A child has one OS account per assigned device")
         return self
@@ -282,11 +293,48 @@ class Outcome(Model):
     error: str | None = Field(default=None, max_length=300)
 
 
+class ReportedRequest(Model):
+    """Validate device-originated requests before they enter durable parent state."""
+
+    id: Annotated[str, Field(min_length=1, max_length=64)]
+    created_at: AwareDatetime
+    expires_at: AwareDatetime
+    status: Literal["pending", "approved", "denied", "cancelled", "expired"] = "pending"
+    minutes: Annotated[int, Field(strict=True, ge=1, le=1440)] | None = None
+    reason: str = Field(default="", max_length=300)
+    decided_by: Key | None = None
+    decision: str | None = Field(default=None, max_length=300)
+
+
+class ReportedApplication(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    status: Literal["applied", "pending"] = "pending"
+    error: str | None = Field(default=None, max_length=300)
+
+
+class ReportedStatus(BaseModel):
+    """Validate consumed fields while retaining device presentation metadata."""
+
+    model_config = ConfigDict(extra="allow")
+    connectivity: Literal["online", "offline", "stale"] = "offline"
+    application: ReportedApplication = Field(default_factory=ReportedApplication)
+    request: ReportedRequest | None = None
+    countedLockedSeconds: Seconds = 0
+
+
 class DeviceReport(Model):
     policyRevision: Annotated[int, Field(ge=0)]
     statuses: dict[Identifier, dict] = Field(default_factory=dict, max_length=100)
     outcomes: list[Outcome] = Field(default_factory=list, max_length=100)
     usage: list[Usage] = Field(default_factory=list, max_length=100)
+
+    @field_validator("statuses")
+    @classmethod
+    def validate_statuses(cls, values: dict[str, dict]) -> dict[str, dict]:
+        return {
+            user: ReportedStatus.model_validate(status).model_dump(mode="json", exclude_unset=True)
+            for user, status in values.items()
+        }
 
 
 class Event(Model):

@@ -1,6 +1,7 @@
 """Timekpr's structured D-Bus contract and shared boot configuration renderer."""
 
 import argparse
+import configparser
 import importlib
 import os
 import tempfile
@@ -10,9 +11,43 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..config import AgentConfig, User
+from pydantic import NaiveDatetime
+
+from ..config import AgentConfig, Model, User
 from ..domain import InvalidCommand, Observation, Policy, Unavailable, Window
 from ..ports import Clock
+from ..usage import Seconds
+
+
+class SavedUsage(Model):
+    """Timekpr's dated counter, read together from its saved work file."""
+
+    checked_at: NaiveDatetime
+    play_seconds: Seconds
+
+    @classmethod
+    def read(cls, path: Path, user: str) -> "SavedUsage":
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            with path.open() as source:
+                before = os.fstat(source.fileno())
+                parser.read_string(source.read())
+                after = os.fstat(source.fileno())
+            if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                raise Unavailable("Timekpr usage changed while reading; retrying")
+            return cls.model_validate(
+                {
+                    "checked_at": parser.get(user, "LAST_CHECKED"),
+                    "play_seconds": parser.getint(user + ".PLAYTIME", "PLAYTIME_SPENT_DAY"),
+                }
+            )
+        except (OSError, ValueError, configparser.Error) as exc:
+            raise Unavailable("Timekpr dated usage unavailable") from exc
+
+    def seconds_today(self, now: datetime) -> int:
+        if self.checked_at.date() > now.date():
+            raise Unavailable("Timekpr usage belongs to a future policy day")
+        return self.play_seconds if self.checked_at.date() == now.date() else 0
 
 
 def hour_map(
@@ -109,17 +144,19 @@ class Timekpr:
             allowed = raw.get("ACTUAL_TIME_LEFT_CONTINUOUS", raw.get("TIME_LEFT_DAY"))
             if play is None or allowed is None:
                 raise ValueError("Missing counters")
-            now = self.clock.now()
             # Configuration readback and live remaining time are not an atomic
-            # snapshot. Only the explicit counter can establish consumed usage;
-            # unreported usage stays reserved until Timekpr saves its counter.
-            spent = int(raw["PLAYTIME_SPENT_DAY"])
+            # snapshot. The D-Bus spent counter also omits its accounting date.
+            # Read the counter and date together so a delayed midnight reset
+            # cannot charge yesterday's usage again. Unflushed usage stays reserved.
+            saved = SavedUsage.read(Path(self.config.timekpr.workDir) / f"{user}.time", user)
+            now = self.clock.now()
+            spent = saved.seconds_today(now)
             active = int(raw.get("ACTUAL_ACTIVE_PLAYTIME_ACTIVITY_COUNT", 0))
             return Observation(
                 max(0, int(play)),
                 max(0, int(allowed)),
                 now,
-                {"playSeconds": max(0, spent), "activeActivities": active},
+                {"playSeconds": spent, "activeActivities": active},
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise Unavailable("Timekpr returned invalid usage counters") from exc
@@ -133,6 +170,16 @@ class Timekpr:
     def typed_limits(self, limits: list[int]) -> Any:
         return self.dbus.Array(limits, signature="i") if self.dbus else limits
 
+    @staticmethod
+    def activities(cfg: User) -> list[list[str]]:
+        """Encode Timekpr's mask[description] entries for its structured D-Bus API."""
+        result = []
+        for activity in cfg.playTime.activities:
+            opening, closing = ('("', '")') if '("' in activity else ("[", "]")
+            mask, separator, description = activity.partition(opening)
+            result.append([mask, description.split(closing, 1)[0] if separator else ""])
+        return result
+
     def apply(self, user: str, policy: Policy, now: datetime) -> None:
         """Set absolute policy, preserving measured usage; verify configuration readback."""
         cfg = self.config.managedUsers[user]
@@ -144,6 +191,25 @@ class Timekpr:
         expected = {}
         with self.connection() as interface:
             current = self.call(interface, "getUserInformation", user, "F")
+            settings = {
+                "TRACK_INACTIVE": ("setTrackInactive", cfg.trackInactive),
+                "LOCKOUT_TYPE": (
+                    "setLockoutType",
+                    "kill"
+                    if cfg.lockoutAction == "terminate" and cfg.killSessions
+                    else cfg.lockoutAction,
+                ),
+                "PLAYTIME_ACTIVITIES": ("setPlayTimeActivities", self.activities(cfg)),
+            }
+            for key, (method, value) in settings.items():
+                if current.get(key) != value:
+                    if key == "LOCKOUT_TYPE":
+                        self.call(interface, method, user, value, "0", "23")
+                    elif key == "PLAYTIME_ACTIVITIES":
+                        activities = self.dbus.Array(value, signature="as") if self.dbus else value
+                        self.call(interface, method, user, activities)
+                    else:
+                        self.call(interface, method, user, value)
             for day in range(1, 8):
                 hours = (
                     hour_map(policy.windows, policy.homework)
@@ -158,6 +224,8 @@ class Timekpr:
             if list(current.get("PLAYTIME_LIMITS_PER_WEEKDAYS", [])) != limits:
                 self.call(interface, "setPlayTimeLimitsForDays", user, self.typed_limits(limits))
             actual = self.call(interface, "getUserInformation", user, "F")
+            if any(actual.get(key) != value for key, (_, value) in settings.items()):
+                raise Unavailable("Timekpr activity or session settings differ from desired policy")
             if list(actual.get("PLAYTIME_LIMITS_PER_WEEKDAYS", [])) != limits:
                 raise Unavailable("Timekpr budget readback differs from desired policy")
             if any(actual.get(key) != hours for key, hours in expected.items()):
